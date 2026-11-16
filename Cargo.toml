@@ -14,3 +14,8 @@ repository = "https://github.com/UCLouvain-ENSG/peersig"
 lto = true
 codegen-units = 1
 strip = true
+
+# Proc macros and build scripts are not stripped: on recent macOS toolchains,
+# stripped proc-macro dylibs fail to load ("mis-aligned LINKEDIT string pool").
+[profile.release.build-override]
+strip = false
