@@ -1,0 +1,108 @@
+name: Release
+
+# Push a tag v<version> (the version in Cargo.toml and crates/app/tauri.conf.json).
+# Everything lands in a draft release: check it, then publish it on GitHub.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  GH_TOKEN: ${{ github.token }}
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions match the tag
+        run: |
+          v=${TAG#v}
+          grep -q "^version = \"$v\"" Cargo.toml || { echo "Cargo.toml is not at $v"; exit 1; }
+          grep -q "\"version\": \"$v\"" crates/app/tauri.conf.json || { echo "tauri.conf.json is not at $v"; exit 1; }
+      - name: Draft release
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "PeerSig $TAG" --notes-file .github/release-notes.md
+
+  app:
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: aarch64-apple-darwin, bundles: 'app,dmg' }
+          - { os: macos-latest, target: x86_64-apple-darwin, bundles: 'app,dmg' }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, bundles: 'deb,appimage' }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-3-dev libfuse2
+      - name: Probe sidecar
+        run: |
+          cargo build --locked --release -p peersig-probe --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/peersig-probe crates/app/binaries/peersig-probe-${{ matrix.target }}
+      - name: Build the app
+        working-directory: crates/app
+        env:
+          S_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          S_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          S_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          S_APPLE_ID: ${{ secrets.APPLE_ID }}
+          S_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          S_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Sign and notarize only when the secrets exist (see docs/deploy.md).
+          if [ -n "$S_APPLE_CERTIFICATE" ]; then
+            export APPLE_CERTIFICATE="$S_APPLE_CERTIFICATE" APPLE_CERTIFICATE_PASSWORD="$S_APPLE_CERTIFICATE_PASSWORD"
+            export APPLE_SIGNING_IDENTITY="$S_APPLE_SIGNING_IDENTITY" APPLE_ID="$S_APPLE_ID"
+            export APPLE_PASSWORD="$S_APPLE_PASSWORD" APPLE_TEAM_ID="$S_APPLE_TEAM_ID"
+          fi
+          npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - name: Upload
+        run: |
+          cd target/${{ matrix.target }}/release/bundle
+          files=$(ls dmg/*.dmg deb/*.deb appimage/*.AppImage 2>/dev/null || true)
+          test -n "$files"
+          gh release upload "$TAG" $files --clobber --repo "$GITHUB_REPOSITORY"
+
+  linux-binaries:
+    needs: draft
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - run: cargo build --locked --release -p peersig-server -p peersig-relay -p peersig-probe
+      - name: Upload
+        run: |
+          d=peersig-$TAG-linux-x86_64
+          mkdir $d
+          cp target/release/peersig-server target/release/peersig-relay target/release/peersig-probe README.md LICENSE-* $d/
+          tar -czf $d.tar.gz $d
+          gh release upload "$TAG" $d.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
+
+  checksums:
+    needs: [app, linux-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          mkdir dist && cd dist
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*'
+          rm -f SHA256SUMS
+          sha256sum * > SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"

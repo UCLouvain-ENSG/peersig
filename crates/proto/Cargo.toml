@@ -1,0 +1,27 @@
+[package]
+name = "peersig-proto"
+description = "PeerSig wire format, anonymous ballot tokens, OHTTP and randomized response"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+bhttp = "0.8.0"
+# 0.18 does not build with rsa 0.10.0 (it was written for a release
+# candidate); 0.15 uses the stable rsa 0.9.
+blind-rsa-signatures = "0.15"
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+ohttp = "0.8.0"
+rand = "0.10.4"
+rand_core = { version = "0.6", features = ["getrandom"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"], optional = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+
+[features]
+# HTTP client used by the PeerSig app (and the server tests).
+client = ["dep:reqwest"]

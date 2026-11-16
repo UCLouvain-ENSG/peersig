@@ -1,0 +1,201 @@
+# Known applications, embedded in the binary at build time.
+#
+# [[browser]]: `bundle_id` matches the app's bundle id exactly or as a prefix
+# followed by a dot (com.google.Chrome covers com.google.Chrome.canary).
+# `family` names the browser; the engine is detected from the bundle
+# (frameworks, XUL, WebKit) and is not listed here. Windows and Linux will
+# match `exe` (file name, case-insensitive) instead.
+#
+# [[stack]]: libraries that say which TLS stack or runtime a process uses.
+# `match` is a substring of a linked or mapped library path.
+#
+# `resolvers`: processes that send DNS queries for others. Their queries
+# are not credited to them (the answers name the connections that follow).
+#
+# Bump `version` on every change.
+
+version = "2026-11-16.1"
+
+resolvers = ["mDNSResponder", "systemd-resolved", "systemd-resolve", "dnsmasq", "unbound", "named", "dnscache", "svchost.exe"]
+
+[[browser]]
+bundle_id = "com.google.Chrome"
+family = "chrome"
+exe = ["chrome.exe", "google-chrome", "chrome"]
+
+[[browser]]
+bundle_id = "org.chromium.Chromium"
+family = "chromium"
+exe = ["chromium", "chromium-browser"]
+
+[[browser]]
+bundle_id = "com.microsoft.edgemac"
+family = "edge"
+exe = ["msedge.exe", "microsoft-edge", "msedge"]
+
+[[browser]]
+bundle_id = "com.brave.Browser"
+family = "brave"
+exe = ["brave.exe", "brave", "brave-browser"]
+
+[[browser]]
+bundle_id = "com.operasoftware.Opera"
+family = "opera"
+exe = ["opera.exe", "opera"]
+
+[[browser]]
+bundle_id = "com.operasoftware.OperaGX"
+family = "opera-gx"
+
+[[browser]]
+bundle_id = "com.vivaldi.Vivaldi"
+family = "vivaldi"
+exe = ["vivaldi.exe", "vivaldi-bin"]
+
+[[browser]]
+bundle_id = "company.thebrowser.Browser"
+family = "arc"
+
+[[browser]]
+bundle_id = "company.thebrowser.dia"
+family = "dia"
+
+[[browser]]
+bundle_id = "ai.perplexity.comet"
+family = "comet"
+
+[[browser]]
+bundle_id = "com.openai.atlas"
+family = "chatgpt-atlas"
+
+[[browser]]
+bundle_id = "org.mozilla.firefox"
+family = "firefox"
+exe = ["firefox.exe", "firefox", "firefox-bin"]
+
+[[browser]]
+bundle_id = "org.mozilla.firefoxdeveloperedition"
+family = "firefox"
+
+[[browser]]
+bundle_id = "org.mozilla.nightly"
+family = "firefox"
+
+[[browser]]
+bundle_id = "org.mozilla.librewolf"
+family = "librewolf"
+exe = ["librewolf.exe", "librewolf"]
+
+[[browser]]
+bundle_id = "app.zen-browser.zen"
+family = "zen"
+exe = ["zen.exe", "zen"]
+
+[[browser]]
+bundle_id = "net.waterfox.waterfox"
+family = "waterfox"
+
+[[browser]]
+bundle_id = "org.torproject.torbrowser"
+family = "tor"
+
+[[browser]]
+bundle_id = "com.apple.Safari"
+family = "safari"
+
+[[browser]]
+bundle_id = "com.apple.SafariTechnologyPreview"
+family = "safari"
+
+[[browser]]
+bundle_id = "com.duckduckgo.macos.browser"
+family = "duckduckgo"
+
+[[browser]]
+bundle_id = "com.kagi.kagimacOS"
+family = "orion"
+
+[[browser]]
+bundle_id = "org.mozilla.thunderbird"
+family = "thunderbird"
+exe = ["thunderbird.exe", "thunderbird"]
+
+[[stack]]
+match = "libboringssl"
+stack = "boringssl"
+
+[[stack]]
+match = "libssl"
+stack = "openssl"
+
+[[stack]]
+match = "/usr/lib/libssl.4"
+stack = "libressl"
+
+[[stack]]
+match = "libnss3"
+stack = "nss"
+
+[[stack]]
+match = "/XUL"
+stack = "nss"
+
+[[stack]]
+match = "libgnutls"
+stack = "gnutls"
+
+[[stack]]
+match = "libmbedtls"
+stack = "mbedtls"
+
+[[stack]]
+match = "libwolfssl"
+stack = "wolfssl"
+
+[[stack]]
+match = "libcurl"
+stack = "curl"
+
+[[stack]]
+match = "Network.framework"
+stack = "apple-network"
+
+[[stack]]
+match = "CFNetwork.framework"
+stack = "apple-cfnetwork"
+
+[[stack]]
+match = "libjvm"
+stack = "java"
+
+[[stack]]
+match = "libpython"
+stack = "python"
+
+[[stack]]
+match = "Python.framework"
+stack = "python"
+
+[[stack]]
+match = "libnode"
+stack = "node"
+
+[[stack]]
+match = "libcoreclr"
+stack = "dotnet"
+
+[[stack]]
+match = "libmonosgen"
+stack = "mono"
+
+[[stack]]
+match = "QtNetwork"
+stack = "qt"
+
+[[stack]]
+match = "libQt5Network"
+stack = "qt"
+
+[[stack]]
+match = "libQt6Network"
+stack = "qt"

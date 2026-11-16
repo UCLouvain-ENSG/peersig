@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/probe", "crates/proto", "crates/server", "crates/relay", "crates/app"]
+# The app needs a desktop toolchain (WebKit/GTK); build it with -p peersig-app.
+default-members = ["crates/probe", "crates/proto", "crates/server", "crates/relay"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/UCLouvain-ENSG/peersig"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

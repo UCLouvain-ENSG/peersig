@@ -1,0 +1,4 @@
+target
+crates/app/binaries
+*.db
+*.jsonl
