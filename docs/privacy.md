@@ -15,6 +15,8 @@ are.
   ballots, publishes results.
 - **Relay**: run by someone else (another lab, the data protection officer,
   a commercial OHTTP relay). Forwards encrypted requests.
+- For enrollment from the web page, the **mail system** that delivers the
+  code, or **GitHub** if the participant signs in with it.
 
 ## What leaves the computer
 
@@ -24,10 +26,13 @@ Items (`crates/proto/src/item.rs`), at most once per item and week:
   dtls), JA4, the JA4 Iris stored before its fix (`ja4_legacy`), and the
   application: name, bundle id, version, code-signing team, kind (browser,
   app, system, cli), engine.
-- `domain` (opt-in): the same application fields without version, and a name
-  it contacted. Never for browsers. Names under `.local`, `.lan`, `.arpa`,
-  `.internal`, IP literals and single labels are dropped; random-looking
-  labels (CDN shards, hashes) are replaced by `*`.
+- `domain` (opt-in): the same application fields without version, a server
+  name it put in a ClientHello (SNI), and the JA4 of that ClientHello: what
+  anyone on the network path sees together. Never for browsers. Only SNI:
+  names seen only in DNS answers or plain HTTP stay on the computer. Names
+  under `.local`, `.lan`, `.arpa`, `.internal`, IP literals and single
+  labels are dropped; random-looking labels (CDN shards, hashes) are
+  replaced by `*`.
 - `presence`: "one participant reported this week", and whether it shares
   domains.
 
@@ -35,6 +40,35 @@ Item parsing refuses unknown fields, so a ballot cannot carry more than
 this. Handshakes with no identified application are not sent.
 
 ## Layers
+
+### 0. Enrollment
+
+Only enrolled participants get tokens. Enrollment is what keeps the
+collection closed: without it, anyone on the internet could flood it with
+made-up ballots. It does not identify ballots (layer 2).
+
+The study team can hand out codes (`codes add`), or participants can get
+one from the server's web page:
+
+- **By e-mail.** The server sends the code to the address given. It keeps a
+  keyed hash of the address (HMAC, with a key stored in the database) and
+  how many codes it got, so that one address gets at most three (one per
+  computer). It does not keep the address, and nothing links the hash to
+  the code. Plus-tags are folded (`alice+x@` counts as `alice@`).
+- **With GitHub.** GitHub's sign-in page asks for no permission: the server
+  only reads the account's number and creation date (accounts younger than
+  30 days are refused, against throwaway accounts). The server keeps a
+  keyed hash of the number, as above, and drops GitHub's token at once. The
+  code is shown once.
+- **From the institution's network** (UCLouvain's, on campus or through its
+  VPN). One click: the server checks that the connection's address is in
+  the network's blocks, then forgets it; it keeps nothing about the visitor,
+  not even a hash. The reverse proxy passes the address for that request
+  only. The code is shown once.
+
+The page hands out a limited number of codes per hour, and gives the same
+answer whether or not an address had codes already, so it cannot be used
+to test addresses.
 
 ### 1. Review and consent
 
@@ -66,7 +100,7 @@ construction: eligibility is checked, identity is not learned.
 
 ### 3. Oblivious HTTP
 
-Ballots, and the configuration and catalogue requests, are encrypted to the
+Ballots, and the configuration request, are encrypted to the
 server's gateway key (RFC 9458, X25519 + AES-128-GCM) and posted to the
 relay. The relay sees the participant's address and an opaque blob; the
 server sees the request, coming from the relay's address. The app fetches
@@ -75,21 +109,7 @@ they differ, so neither can substitute a key.
 
 Ballots are sent one per request, at random times spread over two hours.
 
-### 4. Randomized response on known items
-
-The *catalogue* of an epoch is the set of items already released, frozen
-when the epoch's reporting starts. For each catalogue item, the app reports
-it with probability *p* if it saw it, and with probability *1 − p* if it did
-not (a decoy). With *p* = 0.9, ε = ln 9 ≈ 2.2 per item and week: no single
-ballot proves that the participant uses that application. The server
-estimates counts as (observed − n(1 − p)) / (2p − 1), with *n* the number of
-presence ballots.
-
-Items not in the catalogue (new applications, new versions) are sent as
-they are. They are protected by the other layers, not by noise. With a few
-dozen participants, local DP on new items would drown every signal.
-
-### 5. Counts only
+### 4. Counts only
 
 The server stores one counter per *(week, item)*. It does not store ballots,
 arrival times or request metadata. Tables are `WITHOUT ROWID`, the journal
@@ -97,22 +117,20 @@ is not a WAL and deleted pages are zeroed, so the database file does not
 keep the order in which ballots arrived. Spent token nonces are random. The
 server never logs request addresses.
 
-### 6. Release thresholds and central DP
+### 5. Release thresholds
 
 An item's support is its largest per-week count: the same participant three
 weeks in a row cannot be told from three participants, so this is a lower
-bound on distinct participants. Laplace noise (scale 1/ε, ε = 1 by default)
-is added, and the item is released only if the noisy support reaches *k*
-(3 for hello items, 5 for domains). Released counts are rounded noisy
-values. The noise is drawn per item and release from a keyed hash, so asking
-twice gives the same answer.
+bound on distinct participants. An item is released only once its support
+reaches *k* (3 for hello items, 5 for domains), with that support.
 
 ## What each party learns
 
 | | Server | Relay | Someone with the database file |
 | --- | --- | --- | --- |
 | Who is enrolled, who took part which week | yes | no | yes (as code hashes and labels) |
-| A participant's address | at issuance only | yes | no |
+| A participant's e-mail address or GitHub account (web enrollment) | while sending the code | no | can test a guess |
+| A participant's address | at issuance, and at enrollment from the network | yes | no |
 | Which items a participant has | no | no | no |
 | Which ballots come from one person | no (see limits) | no | no |
 | Per-week item counts | yes | no | yes |
@@ -124,6 +142,18 @@ twice gives the same answer.
   study.
 - **No relay.** Without a relay, the server sees the participant's address
   on each ballot. The app warns about this.
+- **Relay on the server's machine.** A relay run by the server's operator,
+  or on the same machine, protects nothing against that operator: it is
+  collusion by construction. Acceptable for a pilot; move the relay to an
+  independent party before a real collection.
+- **Web enrollment.** The mail system's logs hold the address and the time
+  the message left, and the codes table holds the day each code was made:
+  together, they can tell the server's operator which label is whose, and
+  so which weeks that person took part. That is what the study team knows
+  anyway about codes it hands out; it does not reach the ballots. Someone
+  with the database file has the key of the identity hashes, and can check
+  whether a given address or GitHub account enrolled. GitHub knows its user
+  signed in to PeerSig.
 - **Small anonymity sets.** With 20 participants, a ballot is anonymous
   among 20. A ballot for a rare application, sent during the same two-hour
   window as one participant's issuance, narrows it further. Random spreading
@@ -139,6 +169,20 @@ twice gives the same answer.
 - **Local logs.** The probe's logs hold server names and addresses. They
   stay on the computer, readable by the participant only, and are deleted
   after 14 days.
-- **Composition.** The ε of randomized response is per item and week. Over
-  a whole report (many items) and many weeks, privacy loss adds up, as it
-  does for any repeated measurement.
+- **No noise.** Released supports are exact counts, and nothing hides
+  whether a ballot is real: the protection is that ballots are unlinkable
+  and that only items reported by *k* participants are published. A ballot
+  for a rare item still says that some participant has it.
+
+## Future plans
+
+- **Differential privacy.** An earlier design had randomized response on
+  items the server already knew (local DP) and Laplace noise on published
+  counts (central DP). It was removed: the ε of randomized response is per
+  item and week, and composes over a whole report and over months into a
+  weak guarantee; and noise drawn again at each weekly release averages out
+  across releases. A sound version needs a privacy budget accounted over
+  the whole study (for instance a single noisy release per item, or noise
+  that is drawn once and kept), and enough participants for the noise not
+  to drown the signal.
+- **An independent relay**, run by a party other than the study.

@@ -2,3 +2,5 @@ target
 crates/app/binaries
 *.db
 *.jsonl
+captures
+.git

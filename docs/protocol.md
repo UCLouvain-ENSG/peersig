@@ -17,16 +17,42 @@ accepted for the report epoch only.
 | `GET /ohttp-keys` | direct and via relay | Gateway key configuration (`application/ohttp-keys`) |
 | `POST /ohttp` | via relay | Oblivious HTTP gateway (`message/ohttp-req` → `message/ohttp-res`) |
 | `GET /v1/config` | OHTTP | Epochs, token key of the report epoch, parameters |
-| `GET /v1/catalogue/{epoch}` | OHTTP | Frozen catalogue of an epoch |
 | `POST /v1/ballot` | OHTTP only | One ballot |
 | `GET /v1/released` | OHTTP or direct | Released items with noisy support |
 | `POST /v1/issue` | direct | Token issuance, authenticated by the enrollment code |
-| `GET /` | direct | Human-readable description of the collection |
+| `GET /` | direct | Web page: the collection, and how to get a code |
+| `POST /enroll/mail` | direct | Form `email=`: a code by e-mail (when `--smtp-url` is set) |
+| `GET /enroll/github`, `GET /enroll/github/callback` | direct | A code with a GitHub account (OAuth, no scope) |
+| `POST /enroll/network` | direct | A code for a visitor from `--enroll-networks` |
 
 Inside OHTTP, requests are Binary HTTP (RFC 9292), known-length mode, with
 authority `peersig`. The gateway key (key id 1, DHKEM X25519-SHA256,
 HKDF-SHA256 with AES-128-GCM or ChaCha20-Poly1305) is derived from a seed
 stored by the server, so it survives restarts.
+
+## Enrollment
+
+A code is 60 random bits (`K7QF-2M9D-XW4P`); the server stores
+`SHA-256("peersig-code:" ‖ normalized code)` and a label. Codes come from
+`peersig-server codes add`, or from the web page:
+
+- by e-mail: the server sends the code to the address. The identity is the
+  address, lower case, without a `+tag`;
+- with GitHub: the browser goes to GitHub's authorization page with no
+  scope and a `state` the server MACs (valid 10 minutes); on the way back
+  the server exchanges the code for a token, reads `GET /user` (`id`,
+  `created_at`) and drops the token. The identity is the account id;
+  accounts younger than `--github-min-age-days` are refused;
+- from a network: the server checks the client's address against the
+  blocks (the connection's address, or, from a proxy on the same machine,
+  the last entry of `--client-address-header`). No identity is kept, and
+  no per-identity limit applies.
+
+The server stores `HMAC-SHA256(enroll-key, kind ":" identity)` with a count,
+and refuses a code when the count reaches `--codes-per-identity`. Labels
+are `M<n>` (e-mail), `G<n>` (GitHub) and `N<n>` (network). The page hands out at most
+`--enroll-per-hour` codes per hour, and one message per address every ten
+minutes; it answers the same whether or not an address had codes already.
 
 ## Tokens
 
@@ -56,7 +82,7 @@ already sent.
  "app":{"name":"Google Chrome","id":"com.google.Chrome","version":"157.0.8103.51","team_id":"EQHXZ8M8AV",
         "kind":"browser","engine":"chromium 157.0.8103.51"}}
 {"type":"domain","os":"macos 27","app":{"name":"Microsoft Teams","id":"com.microsoft.teams2","kind":"app"},
- "domain":"teams.microsoft.com"}
+ "domain":"teams.microsoft.com","ja4":"t13d1516h2_8daaf6152771_806a8c22fdea"}
 {"type":"presence","shares_domains":true}
 ```
 
@@ -66,10 +92,9 @@ The server parses the item (unknown fields are rejected), validates it
 ## A week, from the app's side
 
 1. At the start of epoch *c*, open the report of *c − 1* for review.
-2. After the review: fetch the config and the catalogue of *c − 1* through
-   OHTTP; build the ballots (`plan::plan`): randomized response over the
-   catalogue, every non-catalogue item, one presence ballot, shuffled,
-   capped at the budget.
+2. After the review: fetch the config through OHTTP; build the ballots
+   (`plan::plan`): every item the participant kept, once, and one presence
+   ballot, shuffled, capped at the budget.
 3. Ask for exactly `tokens_per_epoch` tokens; check each signature against
    the anonymously fetched key.
 4. Schedule each ballot at a uniform random time over the spread window,
@@ -77,9 +102,6 @@ The server parses the item (unknown fields are rejected), validates it
 
 ## Release
 
-For each item and epoch: the count, debiased if the item was in that
-epoch's catalogue (with *n* = presence ballots, or presence ballots sharing
-domains for domain items). Support = maximum over epochs. Released when
-support + Laplace(1/ε_central) ≥ k. The catalogue of epoch *e* is the
-release computed from epochs before *e*, frozen the first time it is asked
-for, together with the randomized-response parameter in force.
+For each item and epoch, the count. Support = maximum over epochs.
+Released when support ≥ k (`k_hello`, `k_domain`), with the support. Only
+epochs before the current report epoch count.

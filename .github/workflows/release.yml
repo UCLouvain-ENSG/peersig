@@ -92,7 +92,7 @@ jobs:
         run: |
           d=peersig-$TAG-linux-x86_64
           mkdir $d
-          cp target/release/peersig-server target/release/peersig-relay target/release/peersig-probe README.md LICENSE-* $d/
+          cp target/release/peersig-server target/release/peersig-relay target/release/peersig-probe README.md LICENSE $d/
           tar -czf $d.tar.gz $d
           gh release upload "$TAG" $d.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
 

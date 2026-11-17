@@ -29,12 +29,19 @@ pub struct Relay {
     gateway: String,
     http: reqwest::Client,
     per_minute: u32,
+    forwarded: bool,
     seen: Mutex<HashMap<IpAddr, (Instant, u32)>>,
 }
 
 impl Relay {
     /// `gateway`: the server's base URL (it serves `/ohttp` and `/ohttp-keys`).
     pub fn new(gateway: &str, per_minute: u32) -> anyhow::Result<Arc<Self>> {
+        Self::with_options(gateway, per_minute, false)
+    }
+
+    /// `forwarded`: behind a reverse proxy on this machine, rate-limit by
+    /// the address the proxy puts last in `X-Forwarded-For`.
+    pub fn with_options(gateway: &str, per_minute: u32, forwarded: bool) -> anyhow::Result<Arc<Self>> {
         let http = reqwest::Client::builder()
             .user_agent(concat!("peersig-relay/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(30))
@@ -43,6 +50,7 @@ impl Relay {
             gateway: gateway.trim_end_matches('/').to_string(),
             http,
             per_minute,
+            forwarded,
             seen: Mutex::new(HashMap::new()),
         }))
     }
@@ -60,9 +68,27 @@ impl Relay {
         e.1 += 1;
         e.1 <= self.per_minute
     }
+
+    /// The client's address, for rate limiting only. A proxy on this
+    /// machine appends the address it saw to `X-Forwarded-For`; what comes
+    /// before was written by the client and is ignored.
+    fn client(&self, peer: IpAddr, headers: &HeaderMap) -> IpAddr {
+        if !self.forwarded || !peer.is_loopback() {
+            return peer;
+        }
+        headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .last()
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit(',').next())
+            .and_then(|a| a.trim().parse().ok())
+            .unwrap_or(peer)
+    }
 }
 
-/// Forwards the body only: no client header, address or cookie goes on.
+/// Forwards the body only: no client header, address or cookie goes on
+/// (`X-Forwarded-For` included).
 async fn forward(relay: &Relay, req: reqwest::RequestBuilder, response_type: &str) -> Response {
     match req.send().await {
         Ok(r) => {
@@ -89,7 +115,7 @@ async fn ohttp(
     if headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()) != Some(REQUEST_TYPE) {
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "expected message/ohttp-req").into_response();
     }
-    if !relay.allow(peer.ip()) {
+    if !relay.allow(relay.client(peer.ip(), &headers)) {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
     let req = relay.http.post(format!("{}/ohttp", relay.gateway)).header(header::CONTENT_TYPE, REQUEST_TYPE).body(body);
@@ -116,4 +142,23 @@ pub fn router(relay: Arc<Relay>) -> Router {
         .route("/ohttp-keys", get(keys))
         .layer(DefaultBodyLimit::max(64 * 1024))
         .with_state(relay)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn address_behind_a_proxy() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let mut h = HeaderMap::new();
+        // The client wrote the first entry; the local proxy appended the second.
+        h.insert("x-forwarded-for", "203.0.113.66, 192.0.2.7".parse().unwrap());
+        let r = Relay::with_options("http://gateway", 1, true).unwrap();
+        assert_eq!(r.client(ip("127.0.0.1"), &h), ip("192.0.2.7"));
+        // Someone connecting directly cannot choose the address it is counted as.
+        assert_eq!(r.client(ip("198.51.100.1"), &h), ip("198.51.100.1"));
+        let off = Relay::new("http://gateway", 1).unwrap();
+        assert_eq!(off.client(ip("127.0.0.1"), &h), ip("127.0.0.1"));
+    }
 }

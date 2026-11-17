@@ -18,13 +18,18 @@ struct Cli {
     /// Requests per minute and client address.
     #[arg(long, env = "PEERSIG_RELAY_RATE", default_value_t = 600)]
     per_minute: u32,
+    /// Behind a reverse proxy on this machine (Apache, Caddy, nginx): take
+    /// the client's address from the last X-Forwarded-For entry, for rate
+    /// limiting. It is not passed on.
+    #[arg(long, env = "PEERSIG_RELAY_FORWARDED")]
+    forwarded: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
     let cli = Cli::parse();
-    let relay = peersig_relay::Relay::new(&cli.gateway, cli.per_minute)?;
+    let relay = peersig_relay::Relay::with_options(&cli.gateway, cli.per_minute, cli.forwarded)?;
     let l = tokio::net::TcpListener::bind(&cli.listen).await.with_context(|| cli.listen.clone())?;
     tracing::info!("relaying {} -> {}", cli.listen, cli.gateway);
     axum::serve(l, peersig_relay::router(relay).into_make_service_with_connect_info::<SocketAddr>())
