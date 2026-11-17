@@ -5,8 +5,9 @@
 //! the system asks for an administrator password. The binary is copied to
 //! a root-owned path first, so a user process cannot swap what root runs.
 //!
-//! Linux: the probe gets packet-capture capabilities (set by the .deb, or
-//! once through pkexec) and runs as the user, as a child of the app.
+//! Linux: the probe gets packet-capture capabilities (set by the .deb or
+//! the .rpm, or once through pkexec) and runs as the user, as a child of
+//! the app.
 //!
 //! Windows: the probe runs as a LocalSystem service (`PeerSigProbe`), which
 //! can read every process, the way the LaunchDaemon runs as root. Windows

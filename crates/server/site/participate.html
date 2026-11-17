@@ -12,19 +12,25 @@
       <a class="btn grad-bg big" id="dl-main" href="/download/PeerSig-macos-arm64.dmg">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>
         <span id="dl-label">Download for macOS</span></a>
-      <span class="meta" id="dl-meta">macOS 12 or newer (Apple Silicon or Intel) and Linux x86_64.</span>
+      <span class="meta" id="dl-meta">macOS 12 or newer (Apple Silicon or Intel), Windows 10 or 11, and Linux x86_64.</span>
     </div>
     <p class="others">Other systems:
       <a data-kind="macos-arm64" href="/download/PeerSig-macos-arm64.dmg">macOS, Apple Silicon</a>
       <a data-kind="macos-x64" href="/download/PeerSig-macos-x64.dmg">macOS, Intel</a>
+      <a data-kind="windows-x64" href="/download/PeerSig-windows-x64.msi">Windows</a>
       <a data-kind="linux-deb" href="/download/PeerSig-linux-amd64.deb">Linux, .deb</a>
+      <a data-kind="linux-rpm" href="/download/PeerSig-linux-x86_64.rpm">Linux, .rpm</a>
       <a data-kind="linux-appimage" href="/download/PeerSig-linux-x86_64.AppImage">Linux, AppImage</a>
     </p>
     <div class="tip warn" id="dl-tip-mac" role="note">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
       <div><b>The first time:</b> open the disk image and drag PeerSig to Applications, then open it. macOS says it cannot check the developer: open <b>System Settings → Privacy &amp; Security</b> and choose <b>Open Anyway</b>. PeerSig then installs its capture service, and asks for your password once.</div>
     </div>
-    <div class="tip" id="dl-tip-linux" hidden><b>Install</b> with <code>sudo apt install ./PeerSig_*_amd64.deb</code>: the package gives the capture probe the rights it needs. The AppImage runs the app, but cannot give the probe those rights.</div>
+    <div class="tip warn" id="dl-tip-windows" role="note" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+      <div><b>The first time:</b> Windows says it does not know the publisher (the builds are not signed yet): choose <b>More info</b>, then <b>Run anyway</b>. PeerSig then installs its capture service, and Windows asks for an administrator's permission once. Nothing else to install.</div>
+    </div>
+    <div class="tip" id="dl-tip-linux" hidden><b>Install</b> with <code>sudo apt install ./PeerSig_*_amd64.deb</code> (Debian, Ubuntu) or <code>sudo dnf install ./PeerSig-*.x86_64.rpm</code> (Fedora, RHEL, openSUSE with <code>zypper</code>): the package gives the capture probe the rights it needs. The AppImage runs the app, but cannot give the probe those rights.</div>
   </li>
 
   <li id="code">
@@ -36,7 +42,7 @@
   <li id="join">
     <h2>Open PeerSig and paste it</h2>
     <p>The addresses are filled in already: the server <code>{{SERVER}}</code>{{RELAY}}. Paste your code, choose whether to share the server names your non-browser applications connect to, and join.</p>
-    <div class="tip">Then, every Monday, PeerSig shows you last week's list and waits a day: untick anything you do not want to send. It then sends each item as a separate anonymous ballot. The icon in the menu bar tells you when.</div>
+    <div class="tip">Then, every Monday, PeerSig shows you last week's list and waits a day: untick anything you do not want to send. It then sends each item as a separate anonymous ballot. The icon in the menu bar (on Windows, the notification area) tells you when.</div>
   </li>
 </ol>
 <p class="muted small center">{{CONTACT}}<a href="/#anonymity">How you stay anonymous</a> · <a href="https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/privacy.md">Privacy design</a> · <a href="https://github.com/UCLouvain-ENSG/peersig">Source code</a></p>

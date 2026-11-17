@@ -70,7 +70,9 @@
     var KINDS = {
       "macos-arm64": { label: "Download for macOS", meta: "Apple Silicon (M1 and newer) · macOS 12 or newer", tip: "dl-tip-mac" },
       "macos-x64": { label: "Download for macOS (Intel)", meta: "Intel Macs · macOS 12 or newer", tip: "dl-tip-mac" },
+      "windows-x64": { label: "Download for Windows", meta: "Windows 10 and 11 · x64", tip: "dl-tip-windows" },
       "linux-deb": { label: "Download for Linux (.deb)", meta: "Debian, Ubuntu and derivatives · x86_64", tip: "dl-tip-linux" },
+      "linux-rpm": { label: "Download for Linux (.rpm)", meta: "Fedora, RHEL, openSUSE · x86_64", tip: "dl-tip-linux" },
       "linux-appimage": { label: "Download for Linux (AppImage)", meta: "x86_64", tip: "dl-tip-linux" }
     };
     var detect = function () {
@@ -85,8 +87,9 @@
         }
         return Promise.resolve(gpuMac());
       }
-      if (/linux/i.test(plat) || /Linux/.test(ua)) return Promise.resolve("linux-deb");
-      if (/win/i.test(plat) || /Windows/.test(ua)) return Promise.resolve("windows");
+      // Firefox names the distribution; otherwise the .deb, the common case.
+      if (/linux/i.test(plat) || /Linux/.test(ua)) return Promise.resolve(/Fedora|Red Hat|CentOS|SUSE/i.test(ua) ? "linux-rpm" : "linux-deb");
+      if (/win/i.test(plat) || /Windows/.test(ua)) return Promise.resolve("windows-x64");
       return Promise.resolve("other");
     };
     // Safari and Firefox do not say which Mac: Intel Macs have Intel or AMD GPUs.
@@ -106,21 +109,26 @@
     Promise.all([detect(), latest]).then(function (v) {
       var kind = v[0], rel = v[1];
       var file = function (k) { return rel && rel.files && rel.files[k]; };
-      // Versioned names when the release list is known.
+      // Versioned names when the release list is known; a package that is
+      // not in it (not published here yet) is not offered.
       document.querySelectorAll("a[data-kind]").forEach(function (a) {
         var f = file(a.getAttribute("data-kind"));
         if (f) a.href = "/download/" + f.name;
+        else if (rel) a.hidden = true;
       });
       var meta = document.getElementById("dl-meta");
       var k = KINDS[kind];
-      if (!k) {
-        label.textContent = kind === "mobile" ? "PeerSig runs on a computer" : "PeerSig runs on macOS and Linux";
+      var tips = function (shown) {
+        document.querySelectorAll("[id^='dl-tip-']").forEach(function (t) { t.hidden = t.id !== shown; });
+      };
+      if (!k || (rel && !file(kind))) {
+        label.textContent = kind === "mobile" ? "PeerSig runs on a computer" : "PeerSig runs on macOS, Windows and Linux";
         main.removeAttribute("href");
         main.classList.remove("grad-bg");
         var icon = main.querySelector("svg");
         if (icon) icon.remove();
-        ["dl-tip-mac", "dl-tip-linux"].forEach(function (id) { var t = document.getElementById(id); if (t) t.hidden = true; });
-        meta.textContent = kind === "mobile" ? "Open this page on a Mac or a Linux PC." : "Windows is not supported yet.";
+        tips(null);
+        meta.textContent = kind === "mobile" ? "Open this page on a Mac or a PC." : k ? "The package for this system is not published yet." : "Pick your system below.";
         return;
       }
       label.textContent = k.label;
@@ -128,10 +136,7 @@
       if (f) main.href = "/download/" + f.name;
       else main.href = document.querySelector('a[data-kind="' + kind + '"]').href;
       meta.textContent = k.meta + (rel ? " · version " + rel.version : "") + (f && f.size ? " · " + mb(f.size) : "");
-      ["dl-tip-mac", "dl-tip-linux"].forEach(function (id) {
-        var t = document.getElementById(id);
-        if (t) t.hidden = id !== k.tip;
-      });
+      tips(k.tip);
     });
   }
 })();

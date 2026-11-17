@@ -54,7 +54,7 @@ jobs:
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpcap-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-3-dev libfuse2
+          sudo apt-get install -y libpcap-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-3-dev libfuse2 patchelf
       - name: Probe sidecar
         run: |
           ext=""; [ "$RUNNER_OS" = "Windows" ] && ext=".exe"
@@ -77,10 +77,20 @@ jobs:
             export APPLE_PASSWORD="$S_APPLE_PASSWORD" APPLE_TEAM_ID="$S_APPLE_TEAM_ID"
           fi
           npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      # Debian names libpcap's library libpcap.so.0.8; Fedora, RHEL and
+      # openSUSE keep its own name, libpcap.so.1. Same library: the RPM's
+      # probe asks for that name.
+      - if: runner.os == 'Linux'
+        name: RPM
+        working-directory: crates/app
+        run: |
+          patchelf --replace-needed libpcap.so.0.8 libpcap.so.1 binaries/peersig-probe-${{ matrix.target }}
+          patchelf --print-needed binaries/peersig-probe-${{ matrix.target }} | grep -Fx libpcap.so.1
+          npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles rpm
       - name: Upload
         run: |
           cd target/${{ matrix.target }}/release/bundle
-          files=$(ls dmg/*.dmg deb/*.deb appimage/*.AppImage msi/*.msi 2>/dev/null || true)
+          files=$(ls dmg/*.dmg deb/*.deb rpm/*.rpm appimage/*.AppImage msi/*.msi 2>/dev/null || true)
           test -n "$files"
           gh release upload "$TAG" $files --clobber --repo "$GITHUB_REPOSITORY"
 

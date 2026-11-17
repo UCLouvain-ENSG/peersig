@@ -234,6 +234,8 @@ section { padding: 4.5rem 0 1rem; }
 .tip.warn { display: flex; gap: .8rem; align-items: flex-start; color: var(--fg);
   border-color: color-mix(in srgb, var(--warm) 55%, var(--line)); background: color-mix(in srgb, var(--warm) 9%, var(--bg)); }
 .tip.warn svg { flex: none; width: 1.4rem; height: 1.4rem; color: var(--warm); margin-top: .1rem; }
+/* After `display: flex`, which would show a hidden tip. */
+.tip[hidden] { display: none; }
 .methods { display: grid; grid-template-columns: repeat(auto-fit, minmax(14.5rem, 1fr)); gap: .9rem; margin-top: 1rem; }
 .method { border: 1px solid var(--line); border-radius: var(--radius); padding: 1.1rem 1.2rem; background: var(--bg-soft); display: flex; flex-direction: column; gap: .7rem; }
 .method p { margin: 0; font-size: .87rem; color: var(--muted); }
