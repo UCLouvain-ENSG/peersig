@@ -22,12 +22,27 @@
       ["t v sni cs ext alpn b c", "Same TLS library, same settings: same JA4. It names software, never people. Which software, a JA4 alone does not say: that is what PeerSig adds."]
     ];
     var why = document.getElementById("ja4why"), dots = document.getElementById("ja4steps");
-    var step = 0, paused = false;
+    var step = 0, hover = false, holdUntil = 0;
+    // A click (or Enter) shows that step and holds the slideshow a while.
+    var pick = function (i) { show(i); holdUntil = Date.now() + 20000; };
     STEPS.forEach(function (s, i) {
       var d = document.createElement("i");
       d.title = "Step " + (i + 1);
-      d.addEventListener("click", function () { show(i); paused = true; });
+      d.addEventListener("click", function () { pick(i); });
       dots.appendChild(d);
+    });
+    // Every ClientHello field and every part of the JA4 leads to its step.
+    demo.querySelectorAll("[data-f],[data-p]").forEach(function (e) {
+      var n = e.getAttribute("data-f") || e.getAttribute("data-p");
+      var i = STEPS.findIndex(function (s) { return s[0].split(" ").indexOf(n) >= 0; });
+      if (i < 0) return;
+      e.setAttribute("role", "button");
+      e.setAttribute("tabindex", "0");
+      e.classList.add("pick");
+      e.addEventListener("click", function () { pick(i); });
+      e.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(i); }
+      });
     });
     function show(i) {
       step = i;
@@ -40,10 +55,12 @@
       Array.prototype.forEach.call(dots.children, function (d, j) { d.classList.toggle("on", j === i); });
     }
     show(0);
-    demo.addEventListener("mouseenter", function () { paused = true; });
-    demo.addEventListener("mouseleave", function () { paused = false; });
+    demo.addEventListener("mouseenter", function () { hover = true; });
+    demo.addEventListener("mouseleave", function () { hover = false; });
     if (!reduced) {
-      setInterval(function () { if (!paused && !document.hidden) show((step + 1) % STEPS.length); }, 3200);
+      setInterval(function () {
+        if (!hover && !document.hidden && Date.now() > holdUntil) show((step + 1) % STEPS.length);
+      }, 3200);
     }
   }
 

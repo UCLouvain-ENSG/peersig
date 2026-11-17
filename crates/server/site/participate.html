@@ -20,7 +20,10 @@
       <a data-kind="linux-deb" href="/download/PeerSig-linux-amd64.deb">Linux, .deb</a>
       <a data-kind="linux-appimage" href="/download/PeerSig-linux-x86_64.AppImage">Linux, AppImage</a>
     </p>
-    <div class="tip" id="dl-tip-mac"><b>The first time:</b> open the disk image and drag PeerSig to Applications, then open it. macOS says it cannot check the developer: open <b>System Settings → Privacy &amp; Security</b> and choose <b>Open Anyway</b>. PeerSig then installs its capture service, and asks for your password once.</div>
+    <div class="tip warn" id="dl-tip-mac" role="note">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+      <div><b>The first time:</b> open the disk image and drag PeerSig to Applications, then open it. macOS says it cannot check the developer: open <b>System Settings → Privacy &amp; Security</b> and choose <b>Open Anyway</b>. PeerSig then installs its capture service, and asks for your password once.</div>
+    </div>
     <div class="tip" id="dl-tip-linux" hidden><b>Install</b> with <code>sudo apt install ./PeerSig_*_amd64.deb</code>: the package gives the capture probe the rights it needs. The AppImage runs the app, but cannot give the probe those rights.</div>
   </li>
 
