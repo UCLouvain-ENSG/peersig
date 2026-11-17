@@ -25,10 +25,8 @@ async fn through_the_relay() {
     let settings = Settings {
         epochs: EpochSpec { origin: 0, length: 1000 },
         tokens_per_epoch: 4,
-        rr_p: 0.9,
         k_hello: 1,
         k_domain: 1,
-        epsilon_central: 100.0,
         about_url: None,
     };
     let state = State::new(conn, settings, Arc::new(|| 1500)).unwrap();
@@ -44,7 +42,7 @@ async fn through_the_relay() {
         ja4_legacy: None,
         app: AppRef { name: "curl".into(), id: None, version: Some("8.21.0".into()), team_id: None, kind: "cli".into(), engine: None },
     };
-    let pl = plan(cfg.report_epoch, &[item.clone()], &[], cfg.rr_p, false, 4, &mut || rand::random::<f64>());
+    let pl = plan(cfg.report_epoch, &[item.clone()], false, 4, &mut || rand::random::<f64>());
     let blinded = token::blind(&cfg.token_key.public_key, cfg.report_epoch, 4).unwrap();
     let resp = c
         .issue(&IssueRequest { code, epoch: cfg.report_epoch, blinded: blinded.iter().map(|b| b.blind_message.clone()).collect() })

@@ -18,6 +18,25 @@ peersig.example.org {
 }
 ```
 
+With Apache (modules `proxy_http`, `headers`, `ssl`): give the virtual host
+its own `CustomLog`, or the server-wide one (Debian's
+`other-vhosts-access-log`) records every address.
+
+```apache
+<VirtualHost *:443>
+    ServerName peersig.example.org
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/peersig.example.org/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/peersig.example.org/privkey.pem
+    # No access log; errors without the client's address.
+    CustomLog /dev/null common
+    ErrorLogFormat "[%t] [%-m:%l] %M"
+    ProxyPass / http://127.0.0.1:8080/
+    # The server does not need the client's address: do not even pass it.
+    ProxyAddHeaders Off
+</VirtualHost>
+```
+
 Or with Docker (image built from the repository's `Dockerfile`):
 
 ```sh
@@ -32,11 +51,27 @@ Parameters (flags or environment variables):
 | `--epoch-origin` | `PEERSIG_EPOCH_ORIGIN` | Monday of the first run | Fixed when the database is created |
 | `--epoch-days` | `PEERSIG_EPOCH_DAYS` | 7 | Fixed when the database is created |
 | `--tokens-per-epoch` | `PEERSIG_TOKENS` | 512 | Ballots a participant can send per week |
-| `--rr-epsilon` | `PEERSIG_RR_EPSILON` | ln 9 | Randomized response, per item and week |
 | `--k-hello` | `PEERSIG_K_HELLO` | 3 | Participants needed to release a fingerprint |
 | `--k-domain` | `PEERSIG_K_DOMAIN` | 5 | Participants needed to release a domain |
-| `--epsilon-central` | `PEERSIG_EPSILON_CENTRAL` | 1 | Laplace noise on released counts |
 | `--about-url` | `PEERSIG_ABOUT_URL` | none | Study page, linked from the app |
+
+The web page and enrollment from it (`serve` only):
+
+| Flag | Env | Default | |
+| --- | --- | --- | --- |
+| `--public-url` | `PEERSIG_PUBLIC_URL` | none | The server's address, for links and GitHub's callback |
+| `--relay-url` | `PEERSIG_RELAY_URL` | none | Shown on the page and in messages |
+| `--contact` | `PEERSIG_CONTACT` | none | The study team's address, shown on the page and in messages |
+| `--smtp-url` | `PEERSIG_SMTP_URL` | none | Codes by e-mail: `smtp://127.0.0.1:25` (a local MTA, no TLS), `smtp://user:pass@host:587?tls=required`, `smtps://user:pass@host:465` |
+| `--mail-from` | `PEERSIG_MAIL_FROM` | none | `PeerSig <peersig@example.org>` |
+| `--github-client-id`, `--github-client-secret` | `PEERSIG_GITHUB_CLIENT_ID`, `PEERSIG_GITHUB_CLIENT_SECRET` | none | Codes with a GitHub account |
+| `--github-min-age-days` | `PEERSIG_GITHUB_MIN_AGE_DAYS` | 30 | Younger GitHub accounts get no code |
+| `--codes-per-identity` | `PEERSIG_CODES_PER_IDENTITY` | 3 | Codes per address or GitHub account |
+| `--enroll-per-hour` | `PEERSIG_ENROLL_PER_HOUR` | 60 | Codes the page hands out per hour |
+| `--enroll-networks` | `PEERSIG_ENROLL_NETWORKS` | none | Address blocks whose visitors get a code with one click, comma-separated (`130.104.0.0/16,2001:6a8:3080::/44`) |
+| `--enroll-network-name` | `PEERSIG_ENROLL_NETWORK_NAME` | institution's | Their name on the page |
+| `--client-address-header` | `PEERSIG_CLIENT_ADDRESS_HEADER` | none | Behind a proxy: where it puts the client's address on `/enroll/network` |
+| `--notice` | `PEERSIG_NOTICE` | none | Shown at the top of the page, e.g. the limits of a pilot |
 
 ## Relay
 
@@ -50,18 +85,57 @@ peersig-relay --listen 127.0.0.1:8081 --gateway https://peersig.example.org
 
 Same advice: TLS in front, access logs off. It keeps client addresses in
 memory for rate limiting only (600 requests per minute and address by
-default), and forgets them within two minutes.
+default), and forgets them within two minutes. Behind a proxy on the same
+machine, every request comes from 127.0.0.1: pass `--forwarded` so the
+relay counts each client by the address the proxy appends to
+`X-Forwarded-For` (and keep `ProxyAddHeaders` on in that virtual host). The
+header is not passed on to the server.
 
 ## Enrolling participants
+
+Participants need a code: it keeps the collection closed to people who are
+not taking part (see [privacy.md](privacy.md#0-enrollment)). Either hand
+codes out:
 
 ```sh
 peersig-server --db peersig.db codes add --count 20 --prefix P
 ```
 
 prints `P01  K7QF-2M9D-XW4P` and so on. Only a hash of each code is stored:
-give each participant theirs, with the server and relay addresses, when
-they consent. `codes list` shows the weeks each label took part in (to pay
-participants), `codes revoke P07` withdraws one.
+give each participant theirs when they consent. `codes list` shows the
+weeks each label took part in (to pay participants), `codes revoke P07`
+withdraws one.
+
+Or let the web page hand them out, by e-mail, with GitHub, from a network,
+or any of these:
+
+- **E-mail**: `--smtp-url` and `--mail-from`. A local MTA that signs (DKIM)
+  and is allowed to send for the sender's domain (SPF) keeps messages out
+  of spam folders.
+- **GitHub**: register an OAuth app (GitHub → Settings → Developer
+  settings → OAuth Apps; for an organisation, its settings), with the
+  callback URL `<public-url>/enroll/github/callback`, and pass its client
+  id and secret. Accounts younger than `--github-min-age-days` (30) get no
+  code.
+- **Network**: `--enroll-networks` with the institution's blocks (its
+  network and VPN). Behind a proxy, the server sees 127.0.0.1: have the
+  proxy put the client's address in a header **on that path only**,
+  overwriting what the client sent, and name it with
+  `--client-address-header`. With Apache:
+
+  ```apache
+  <Location /enroll/network>
+      RequestHeader set X-PeerSig-Client "expr=%{REMOTE_ADDR}"
+  </Location>
+  ```
+
+Codes from the page are labelled `M01`, `G02`, `N03`... in `codes list`. The page
+needs `--public-url`; without e-mail or GitHub, it says the study team
+hands out codes.
+
+The app's join screen fills in the addresses compiled in as
+`DEFAULT_SERVER` and `DEFAULT_RELAY` (`crates/app/src/core.rs`): change them
+for another collection.
 
 ## Results
 
@@ -85,11 +159,16 @@ Pushing a tag `v<version>` runs `.github/workflows/release.yml`:
 They go to a **draft** release; check it and publish it on GitHub. The tag
 must match the version in `Cargo.toml` and `crates/app/tauri.conf.json`.
 
-The macOS builds are not signed. To sign and notarize them, add the
-repository secrets `APPLE_CERTIFICATE` (base64 .p12),
+Without Apple secrets, the macOS builds are signed ad hoc
+(`signingIdentity: "-"` in `tauri.conf.json`): the first time, macOS
+refuses to open them, and *System Settings → Privacy & Security → Open
+Anyway* lets them run. A bundle with no signature at all (only the linker's
+on the executable) is reported as "damaged", with no way to open it. To sign
+and notarize, add the repository secrets `APPLE_CERTIFICATE` (base64 .p12),
 `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
 `APPLE_PASSWORD` (app-specific) and `APPLE_TEAM_ID`. The workflow passes
-them to the Tauri bundler when they are set.
+them to the Tauri bundler when they are set; `APPLE_SIGNING_IDENTITY`
+overrides the ad-hoc identity.
 
 On Linux, install the `.deb`: its post-install script gives the probe the
 capture capabilities it needs. The AppImage cannot carry capabilities; the

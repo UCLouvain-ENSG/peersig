@@ -1,0 +1,171 @@
+<section class="hero">
+  <div class="eyebrow">Ground truth for TLS fingerprints</div>
+  <h1>Which app sent that<br><span class="grad">TLS handshake?</span></h1>
+  <p class="lead">Volunteers' computers know which application opened each encrypted connection. PeerSig collects that knowledge, anonymously, into a public table that labels the fingerprints (JA4) seen on any network.</p>
+  <p class="cta">
+    <a class="btn primary big" href="/participate">Participate</a>
+    <a class="btn big" href="#anonymity">How you stay anonymous</a>
+    <a class="btn ghost big" href="#ja4">What is JA4?</a>
+  </p>
+  {{NOTICE}}
+  <div class="scene" id="scene" aria-label="Volunteers send fingerprint and application pairs to a shared table; network traffic is then labelled from that table."></div>
+  <div class="legend">
+    <div><b>Volunteers</b>Each week, their PeerSig app sends which application sent which fingerprint, one anonymous ballot per pair.</div>
+    <div><b>The table</b>Pairs reported by enough volunteers are published: JA4, application, version, and the server name when volunteers allow it.</div>
+    <div><b>Any network</b>An operator or researcher sees a JA4 in a ClientHello, looks it up, and knows it is Microsoft Teams, not malware.</div>
+  </div>
+</section>
+
+<section id="anonymity">
+  <div class="eyebrow">Anonymity</div>
+  <h2>We learn about software, <span class="grad">not about you</span></h2>
+  <p class="lead">What could describe a person is who runs which software. Each layer below keeps that from the study, the relay, and anyone who gets the database.</p>
+  <div class="grid">
+
+    <div class="card">
+      <svg class="anim" viewBox="0 0 260 120" aria-hidden="true">
+        <g transform="translate(46 22)">
+          <rect width="16" height="16" rx="4" class="a-acc"/><path d="M4 8.5l3 3 5-6" class="rv-tick"/>
+          <rect x="28" y="4" width="96" height="8" rx="4" class="a-soft"/><text x="134" y="12" class="a-txt">Teams</text>
+        </g>
+        <g transform="translate(46 52)"><g class="rv-row2">
+          <rect width="16" height="16" rx="4" class="rv-box2 a-acc-s" stroke-width="1.5"/><path d="M4 8.5l3 3 5-6" class="rv-tick rv-tick2"/>
+          <rect x="28" y="4" width="70" height="8" rx="4" class="a-soft"/><text x="108" y="12" class="a-txt">Rare app 0.3</text>
+        </g></g>
+        <g transform="translate(46 82)">
+          <rect width="16" height="16" rx="4" class="a-acc"/><path d="M4 8.5l3 3 5-6" class="rv-tick"/>
+          <rect x="28" y="4" width="110" height="8" rx="4" class="a-soft"/><text x="148" y="12" class="a-txt">git</text>
+        </g>
+        <g transform="translate(54 62)"><g class="rv-cursor"><path d="M0 0v15l4-3.6 3 6.6 2.6-1.1-3-6.4h5.2z" class="a-ink"/></g></g>
+      </svg>
+      <h3>You review it first</h3>
+      <p>Each week's list waits a day in the app. Untick anything, it is never sent. Nothing leaves while the app is closed.</p>
+    </div>
+
+    <div class="card">
+      <svg class="anim" viewBox="0 0 260 120" aria-hidden="true">
+        <defs><clipPath id="bs-clip"><rect x="74" y="40" width="112" height="58" rx="10"/></clipPath></defs>
+        <text x="130" y="112" text-anchor="middle" class="a-txt">the server signs without seeing</text>
+        <g transform="translate(80 46)">
+          <rect width="100" height="46" rx="8" class="a-soft"/>
+          <rect x="12" y="14" width="50" height="6" rx="3" class="a-mut"/><rect x="12" y="26" width="34" height="6" rx="3" class="a-mut"/>
+          <g transform="translate(66 11)"><g class="bs-seal"><circle cx="12" cy="12" r="12" class="a-acc2"/><path d="M7 12l3.5 3.5 6-7" stroke="#fff" stroke-width="2.2" fill="none"/></g></g>
+        </g>
+        <g clip-path="url(#bs-clip)"><g transform="translate(74 40)"><g class="bs-cover">
+          <rect width="112" height="58" rx="10" class="a-acc"/>
+          <path d="M10 58L40 0M30 58L60 0M50 58L80 0M70 58L100 0M90 58L118 4" stroke="#fff" stroke-opacity=".18" stroke-width="7"/>
+          <text x="56" y="33" text-anchor="middle" class="a-txt-b a-white">blinded</text>
+        </g></g></g>
+        <g transform="translate(130 4)"><g class="bs-stamp"><rect x="-5" y="0" width="10" height="20" rx="3" class="a-ink"/><rect x="-20" y="20" width="40" height="10" rx="3" class="a-ink"/></g></g>
+      </svg>
+      <h3>Blind tokens</h3>
+      <p>The server signs your tokens through a veil, as in anonymous e-voting. It knows a ballot comes from a participant, never which one.</p>
+    </div>
+
+    <div class="card">
+      <svg class="anim" viewBox="0 0 260 120" aria-hidden="true">
+        <g transform="translate(22 22)">
+          <rect width="56" height="70" rx="7" class="a-soft"/>
+          <rect x="10" y="12" width="36" height="5" rx="2.5" class="a-mut"/><rect x="10" y="25" width="28" height="5" rx="2.5" class="a-mut"/>
+          <rect x="10" y="38" width="32" height="5" rx="2.5" class="a-mut"/><rect x="10" y="51" width="22" height="5" rx="2.5" class="a-mut"/>
+        </g>
+        <text x="50" y="110" text-anchor="middle" class="a-txt">your week</text>
+        <g transform="translate(198 22)"><rect width="44" height="70" rx="8" class="a-soft"/><rect x="10" y="12" width="24" height="4" rx="2" class="a-mut"/><rect x="10" y="22" width="24" height="4" rx="2" class="a-mut"/></g>
+        <text x="220" y="110" text-anchor="middle" class="a-txt">server</text>
+        <g transform="translate(70 52)"><g class="sp b1"><rect width="22" height="15" rx="3" class="a-acc"/><circle cx="16.5" cy="7.5" r="2.6" fill="#fff"/></g></g>
+        <g transform="translate(70 52)"><g class="sp b2"><rect width="22" height="15" rx="3" class="a-acc"/><circle cx="16.5" cy="7.5" r="2.6" fill="#fff"/></g></g>
+        <g transform="translate(70 52)"><g class="sp b3"><rect width="22" height="15" rx="3" class="a-acc"/><circle cx="16.5" cy="7.5" r="2.6" fill="#fff"/></g></g>
+        <g transform="translate(70 52)"><g class="sp b4"><rect width="22" height="15" rx="3" class="a-acc"/><circle cx="16.5" cy="7.5" r="2.6" fill="#fff"/></g></g>
+      </svg>
+      <h3>One ballot per item</h3>
+      <p>Every item travels alone, with its own token, at a random time. The server cannot tell which items come from the same person.</p>
+    </div>
+
+    <div class="card">
+      <svg class="anim" viewBox="0 0 260 120" aria-hidden="true">
+        <g transform="translate(6 40)"><rect width="32" height="22" rx="3" class="a-soft"/><path d="M-4 26h40l-4 6H0z" class="a-mut"/></g>
+        <text x="22" y="92" text-anchor="middle" class="a-txt">you</text>
+        <g transform="translate(130 24)"><rect width="20" height="60" rx="6" class="a-soft"/><path d="M10 14l7 3v7c0 5-3 9-7 11-4-2-7-6-7-11v-7z" class="a-acc2"/></g>
+        <text x="140" y="104" text-anchor="middle" class="a-txt">relay</text>
+        <g transform="translate(224 34)"><rect width="34" height="46" rx="6" class="a-soft"/></g>
+        <text x="241" y="104" text-anchor="middle" class="a-txt">server</text>
+        <g transform="translate(230 46)"><g class="rl-open"><rect width="22" height="4" rx="2" class="a-acc"/><rect y="8" width="16" height="4" rx="2" class="a-acc"/><rect y="16" width="19" height="4" rx="2" class="a-acc"/></g></g>
+        <g transform="translate(16 46)"><g class="rl-env">
+          <rect width="28" height="20" rx="3" class="a-acc"/><path d="M1 2l13 10 13-10" stroke="#fff" stroke-opacity=".5" stroke-width="1.5" fill="none"/>
+          <g class="rl-tag"><rect x="-2" y="-17" width="32" height="13" rx="6.5" class="a-soft"/><text x="14" y="-7.5" text-anchor="middle" class="a-txt">from you</text></g>
+        </g></g>
+      </svg>
+      <h3>A relay hides your address</h3>
+      <p>Ballots are sealed for the server and handed to a relay (Oblivious HTTP). The relay sees who, not what; the server sees what, not who.</p>
+    </div>
+
+    <div class="card">
+      <svg class="anim" viewBox="0 0 260 120" aria-hidden="true">
+        <g transform="translate(96 54)"><rect width="68" height="48" rx="8" class="a-soft"/><rect x="18" y="-4" width="32" height="8" rx="4" class="a-mut"/></g>
+        <text x="130" y="88" text-anchor="middle" class="a-txt-b"><tspan class="ct-a">41</tspan></text>
+        <text x="130" y="88" text-anchor="middle" class="a-txt-b"><tspan class="ct-b">42</tspan></text>
+        <g transform="translate(119 20)"><g class="ct-drop"><rect width="22" height="15" rx="3" class="a-acc"/><circle cx="16.5" cy="7.5" r="2.6" fill="#fff"/></g></g>
+        <text x="200" y="76" class="a-txt">counter: +1</text><text x="200" y="90" class="a-txt">ballot: gone</text>
+        <text x="16" y="76" class="a-txt">no address</text><text x="16" y="90" class="a-txt">no time</text>
+      </svg>
+      <h3>Counts, not ballots</h3>
+      <p>The server keeps one counter per item and week. No ballot, no arrival time, no address: the database cannot say who sent what.</p>
+    </div>
+
+    <div class="card">
+      <svg class="anim" viewBox="0 0 260 120" aria-hidden="true">
+        <g transform="translate(26 40)"><rect width="208" height="40" rx="10" class="a-soft"/>
+          <text x="14" y="25" class="a-txt-b">Rare app 0.3</text>
+          <circle class="th-dot a-acc" cx="112" cy="20" r="7"/><circle class="th-dot d2 a-acc" cx="132" cy="20" r="7"/><circle class="th-dot d3 a-acc" cx="152" cy="20" r="7"/>
+          <g class="th-pub"><rect x="166" y="9" width="34" height="22" rx="11" class="a-acc2"/><path d="M175 20l4 4 8-8" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+        </g>
+        <text x="130" y="104" text-anchor="middle" class="a-txt">published once k = {{K_HELLO}} participants reported it</text>
+      </svg>
+      <h3>Published only when common</h3>
+      <p>An item appears in the public table only once {{K_HELLO}} participants reported it in the same week ({{K_DOMAIN}} for server names). Rare software stays private.</p>
+    </div>
+  </div>
+  <p class="muted small center">The full design, with its limits, is in <a href="https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/privacy.md">docs/privacy.md</a>.</p>
+</section>
+
+<section id="ja4">
+  <div class="eyebrow">JA4</div>
+  <h2>A fingerprint of the <span class="grad">handshake</span>, not of a person</h2>
+  <p class="lead">Every encrypted connection starts with a ClientHello: the client lists what it supports, in clear. <a href="https://github.com/FoxIO-LLC/ja4/blob/main/technical_details/JA4.md">JA4</a> condenses it into three parts. The same TLS library, set up the same way, always gives the same JA4.</p>
+  <div class="ja4" id="ja4demo">
+    <div class="hello">
+      <div class="hd">ClientHello, from Microsoft Teams</div>
+      <div class="f" data-f="t"><span>Transport</span><span>TCP</span></div>
+      <div class="f" data-f="v"><span>Highest version</span><span>TLS 1.3</span></div>
+      <div class="f" data-f="sni"><span>Server name (SNI)</span><span>teams.microsoft.com</span></div>
+      <div class="f" data-f="cs"><span>Cipher suites (15)</span><span>1301 1302 1303 c02b …</span></div>
+      <div class="f" data-f="ext"><span>Extensions (16)</span><span>0005 000a 000b 000d …</span></div>
+      <div class="f" data-f="alpn"><span>ALPN</span><span>h2, http/1.1</span></div>
+      <div class="f" data-f="sig"><span>Signature algorithms</span><span>0403 0804 0401 …</span></div>
+    </div>
+    <div class="fp">
+      <div class="string"><span class="part-a"><span data-p="t">t</span><span data-p="v">13</span><span data-p="sni">d</span><span data-p="cs">15</span><span data-p="ext">16</span><span data-p="alpn">h2</span></span>_<span class="part-b" data-p="b">8daaf6152771</span>_<span class="part-c" data-p="c">806a8c22fdea</span></div>
+      <p class="why" id="ja4why"><b>JA4</b>: read the ClientHello on the left, step by step.</p>
+      <div class="steps-ja4" id="ja4steps"></div>
+    </div>
+  </div>
+
+  <div class="pairs">
+    <h3>Why the server name matters</h3>
+    <p class="muted">Applications that share a TLS library share a JA4. With the server name (SNI) that participants may choose to share, for non-browser applications only, the table tells them apart. Examples from a test run:</p>
+    <table>
+      <tr><th>JA4</th><th>Server name</th><th>Application</th></tr>
+      <tr><td class="m">t13d2013h2_a09f3c656075_7f0f34a4126d</td><td class="m">api.whatsapp.net</td><td>WhatsApp</td></tr>
+      <tr><td class="m">t13d2013h2_a09f3c656075_7f0f34a4126d</td><td class="m">teams.cloud.microsoft</td><td>Microsoft Outlook</td></tr>
+      <tr><td class="m">t13d2013h2_a09f3c656075_7f0f34a4126d</td><td class="m">bag.itunes.apple.com</td><td>App Store (amsengagementd)</td></tr>
+      <tr><td class="m">t13d1516h2_8daaf6152771_806a8c22fdea</td><td class="m">teams.public.onecdn.static.microsoft</td><td>Microsoft Teams</td></tr>
+      <tr><td class="m">t13d1516h2_8daaf6152771_806a8c22fdea</td><td class="m">main.vscode-cdn.net</td><td>Visual Studio Code</td></tr>
+    </table>
+  </div>
+</section>
+
+<section class="final">
+  <h2>Lend your computer's <span class="grad">point of view</span></h2>
+  <p class="lead">Three minutes to set up, a glance once a week. Your machine teaches the table which applications send which fingerprints.</p>
+  <p class="cta"><a class="btn grad-bg big" href="/participate">Participate</a><a class="btn big" href="/v1/released">See the published table</a></p>
+</section>

@@ -106,10 +106,6 @@ impl Client {
         self.oblivious_json("GET", PATH_CONFIG, b"").await
     }
 
-    pub async fn catalogue(&mut self, epoch: u32) -> Result<Catalogue> {
-        self.oblivious_json("GET", &path_catalogue(epoch), b"").await
-    }
-
     /// Direct: the server knows who asks, but tokens are blinded.
     pub async fn issue(&self, req: &IssueRequest) -> Result<IssueResponse> {
         let url = format!("{}{}", self.server, PATH_ISSUE);

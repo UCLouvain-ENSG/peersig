@@ -1,13 +1,14 @@
 //! `peersig-server`: run the collection server, and administer it from the
 //! host (enrollment codes, statistics, exports). There is no admin HTTP API.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 
-use peersig_proto::{rr, EpochSpec, Item};
-use peersig_server::{api, db, release, system_clock, Settings, State};
+use peersig_proto::{EpochSpec, Item};
+use peersig_server::enroll::{Block, Enrollment, GitHub, Mail, Network};
+use peersig_server::{api, db, release, system_clock, web, Settings, State};
 
 #[derive(Parser)]
 #[command(name = "peersig-server", version, about = "PeerSig collection server")]
@@ -26,18 +27,12 @@ struct Params {
     /// Tokens per participant and epoch, the same for everyone.
     #[arg(long, global = true, env = "PEERSIG_TOKENS", default_value_t = 512)]
     tokens_per_epoch: u32,
-    /// Local differential privacy of randomized response, per item and epoch.
-    #[arg(long, global = true, env = "PEERSIG_RR_EPSILON", default_value_t = 9f64.ln())]
-    rr_epsilon: f64,
     /// Participants needed to release a hello item.
     #[arg(long, global = true, env = "PEERSIG_K_HELLO", default_value_t = 3)]
     k_hello: u32,
     /// Participants needed to release a domain item.
     #[arg(long, global = true, env = "PEERSIG_K_DOMAIN", default_value_t = 5)]
     k_domain: u32,
-    /// Epsilon of the Laplace noise on released supports.
-    #[arg(long, global = true, env = "PEERSIG_EPSILON_CENTRAL", default_value_t = 1.0)]
-    epsilon_central: f64,
     /// Page describing the study, shown in the app.
     #[arg(long, global = true, env = "PEERSIG_ABOUT_URL")]
     about_url: Option<String>,
@@ -52,10 +47,12 @@ struct Params {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Serve the API.
+    /// Serve the API and the web page.
     Serve {
         #[arg(long, env = "PEERSIG_LISTEN", default_value = "127.0.0.1:8080")]
         listen: String,
+        #[command(flatten)]
+        web: WebArgs,
     },
     /// Enrollment codes.
     Codes {
@@ -70,6 +67,91 @@ enum Cmd {
         #[arg(long, default_value = "json")]
         format: String,
     },
+}
+
+/// The web page, and enrollment from it. Without --smtp-url or a GitHub
+/// app, the page tells visitors that the study team gives out codes.
+#[derive(Args)]
+struct WebArgs {
+    /// The server's public address (https://...): links, and GitHub's callback.
+    #[arg(long, env = "PEERSIG_PUBLIC_URL")]
+    public_url: Option<String>,
+    /// The relay participants should use, shown on the page and in messages.
+    #[arg(long, env = "PEERSIG_RELAY_URL")]
+    relay_url: Option<String>,
+    /// The study team's e-mail address, shown on the page and in messages.
+    #[arg(long, env = "PEERSIG_CONTACT")]
+    contact: Option<String>,
+    /// Codes one e-mail address or GitHub account can get (one per computer).
+    #[arg(long, env = "PEERSIG_CODES_PER_IDENTITY", default_value_t = 3)]
+    codes_per_identity: u32,
+    /// Codes the page hands out per hour, all methods together.
+    #[arg(long, env = "PEERSIG_ENROLL_PER_HOUR", default_value_t = 60)]
+    enroll_per_hour: u32,
+    /// SMTP server for codes by e-mail: smtp://host:25 (no TLS, a local
+    /// MTA), smtp://user:pass@host:587?tls=required or smtps://user:pass@host:465.
+    #[arg(long, env = "PEERSIG_SMTP_URL", hide_env_values = true)]
+    smtp_url: Option<String>,
+    /// Sender of those messages, e.g. "PeerSig <peersig@example.org>".
+    #[arg(long, env = "PEERSIG_MAIL_FROM")]
+    mail_from: Option<String>,
+    /// GitHub OAuth app for codes with a GitHub account. Its callback URL
+    /// is <public-url>/enroll/github/callback.
+    #[arg(long, env = "PEERSIG_GITHUB_CLIENT_ID")]
+    github_client_id: Option<String>,
+    #[arg(long, env = "PEERSIG_GITHUB_CLIENT_SECRET", hide_env_values = true)]
+    github_client_secret: Option<String>,
+    /// GitHub accounts younger than this many days get no code.
+    #[arg(long, env = "PEERSIG_GITHUB_MIN_AGE_DAYS", default_value_t = 30)]
+    github_min_age_days: u32,
+    /// Address blocks whose visitors get a code with one click (CIDR,
+    /// comma-separated), e.g. a university's network and VPN.
+    #[arg(long, env = "PEERSIG_ENROLL_NETWORKS", value_delimiter = ',')]
+    enroll_networks: Vec<String>,
+    /// That network's name on the page.
+    #[arg(long, env = "PEERSIG_ENROLL_NETWORK_NAME", default_value = "institution's")]
+    enroll_network_name: String,
+    /// Behind a reverse proxy on this machine: the header in which it puts
+    /// the client's address, on /enroll/network only, overwriting what the
+    /// client sent (Apache: RequestHeader set X-PeerSig-Client "expr=%{REMOTE_ADDR}").
+    #[arg(long, env = "PEERSIG_CLIENT_ADDRESS_HEADER")]
+    client_address_header: Option<String>,
+    /// A note shown at the top of the page, e.g. the limits of a pilot.
+    #[arg(long, env = "PEERSIG_NOTICE")]
+    notice: Option<String>,
+}
+
+/// An empty variable (as in an env file) counts as unset.
+fn set(v: &Option<String>) -> Option<&str> {
+    v.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn enrollment(w: &WebArgs) -> Result<Enrollment> {
+    let blocks: Vec<Block> = w.enroll_networks.iter().map(|b| b.trim()).filter(|b| !b.is_empty()).map(str::parse).collect::<Result<_>>()?;
+    let wants_mail = set(&w.smtp_url).is_some();
+    let wants_github = set(&w.github_client_id).is_some();
+    let public = set(&w.public_url);
+    if (wants_mail || wants_github || !blocks.is_empty()) && public.is_none() {
+        bail!("enrollment from the web page needs --public-url");
+    }
+    let mut e = Enrollment::new(public.unwrap_or(""), set(&w.relay_url), w.codes_per_identity, w.enroll_per_hour);
+    e.contact = set(&w.contact).map(String::from);
+    if let Some(url) = set(&w.smtp_url) {
+        let from = set(&w.mail_from).context("--smtp-url needs --mail-from")?;
+        e.mail = Some(Mail::smtp(url, from)?);
+    }
+    if !blocks.is_empty() {
+        e.network = Some(Network {
+            name: w.enroll_network_name.trim().to_string(),
+            blocks,
+            address_header: set(&w.client_address_header).map(String::from),
+        });
+    }
+    if let Some(id) = set(&w.github_client_id) {
+        let secret = set(&w.github_client_secret).context("--github-client-id needs --github-client-secret")?;
+        e.github = Some(GitHub::new(id, secret, w.github_min_age_days)?);
+    }
+    Ok(e)
 }
 
 #[derive(Subcommand)]
@@ -113,16 +195,11 @@ fn epochs(c: &rusqlite::Connection, p: &Params) -> Result<EpochSpec> {
 }
 
 fn settings(c: &rusqlite::Connection, p: &Params) -> Result<Settings> {
-    if !(p.rr_epsilon > 0.0) || !(p.epsilon_central > 0.0) {
-        bail!("epsilons must be positive");
-    }
     Ok(Settings {
         epochs: epochs(c, p)?,
         tokens_per_epoch: p.tokens_per_epoch,
-        rr_p: rr::p_for_epsilon(p.rr_epsilon),
         k_hello: p.k_hello,
         k_domain: p.k_domain,
-        epsilon_central: p.epsilon_central,
         about_url: p.about_url.clone(),
     })
 }
@@ -133,21 +210,29 @@ fn main() -> Result<()> {
     let conn = db::open(&cli.db)?;
     let s = settings(&conn, &cli.params)?;
     match cli.cmd {
-        Cmd::Serve { listen } => {
+        Cmd::Serve { listen, web: w } => {
+            let enroll = enrollment(&w)?;
+            let methods: Vec<&str> =
+                [enroll.mail.as_ref().map(|_| "e-mail"), enroll.github.as_ref().map(|_| "GitHub"), enroll.network.as_ref().map(|_| "network")]
+                    .into_iter()
+                    .flatten()
+                    .collect();
             let state = State::new(conn, s.clone(), system_clock())?;
+            let app = api::router(state.clone()).merge(web::router(std::sync::Arc::new(web::Web { state, enroll, notice: set(&w.notice).map(String::from) })));
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async move {
                 let l = tokio::net::TcpListener::bind(&listen).await.with_context(|| listen.clone())?;
                 tracing::info!(
-                    "listening on {}; epochs of {} days from {}; rr p={:.3}, k={}/{}",
+                    "listening on {}; epochs of {} days from {}; k={}/{}; enrollment: {}",
                     listen,
                     s.epochs.length / 86400,
                     chrono::DateTime::from_timestamp(s.epochs.origin, 0).unwrap().date_naive(),
-                    s.rr_p,
                     s.k_hello,
-                    s.k_domain
+                    s.k_domain,
+                    if methods.is_empty() { "codes from the study team only".to_string() } else { methods.join(", ") }
                 );
-                axum::serve(l, api::router(state))
+                // The connection's address reaches the network enrollment only.
+                axum::serve(l, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
                     .with_graceful_shutdown(async {
                         let _ = tokio::signal::ctrl_c().await;
                     })
@@ -194,7 +279,7 @@ fn main() -> Result<()> {
                 "json" => println!("{}", serde_json::to_string_pretty(&r)?),
                 "classifier" => {
                     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                    let mut by_ja4: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                    let mut by_ja4: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
                     for ri in &r.items {
                         if let Item::Hello { os, ja4, app, .. } = &ri.item {
                             let mut d = app.name.clone();
@@ -202,7 +287,7 @@ fn main() -> Result<()> {
                                 d.push_str(&format!(" {}", v));
                             }
                             d.push_str(&format!(" ({}{}, {})", app.kind, app.engine.as_deref().map(|e| format!(", {}", e)).unwrap_or_default(), os));
-                            by_ja4.entry(ja4.clone()).or_default().push(d);
+                            by_ja4.entry(ja4.clone()).or_default().insert(d);
                         }
                     }
                     let rows: Vec<serde_json::Value> = by_ja4
@@ -210,7 +295,7 @@ fn main() -> Result<()> {
                         .map(|(ja4, apps)| {
                             serde_json::json!({
                                 "ja4_hash": ja4,
-                                "desc": format!("{} (PeerSig, k>={})", apps.join("; "), r.k_hello),
+                                "desc": format!("{} (PeerSig, k>={})", apps.into_iter().collect::<Vec<_>>().join("; "), r.k_hello),
                                 "source": "peersig",
                                 "fetched": today,
                             })

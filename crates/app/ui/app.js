@@ -86,8 +86,10 @@ function renderPill() {
 
 function renderEnroll() {
   const server = el("input", { type: "url", placeholder: "https://peersig.example.org", value: state.settings.server || "" });
-  const relay = el("input", { type: "url", placeholder: "https://relay.example.net (given with your code)", value: state.settings.relay || "" });
+  const relay = el("input", { type: "url", placeholder: "https://relay.example.net", value: state.settings.relay || "" });
   const code = el("input", { type: "text", placeholder: "XXXX-XXXX-XXXX", autocomplete: "off" });
+  const getCode = el("button", { class: "btn", type: "button" }, "Get a code…");
+  getCode.addEventListener("click", () => call("open_url", { url: server.value.trim() }));
   const domains = el("input", { type: "checkbox" });
   const agree = el("input", { type: "checkbox" });
   const go = el("button", { class: "btn primary", disabled: true }, "Join the study");
@@ -111,8 +113,10 @@ function renderEnroll() {
     el("label", { class: "field" }, el("span", {}, "Collection server"), server),
     el("label", { class: "field" }, el("span", {}, "Relay (hides your address from the server)"), relay),
     el("label", { class: "field" }, el("span", {}, "Enrollment code"), code),
+    el("p", { class: "muted small" }, "The study's web page gives you a code: in one click from the university's network, or by e-mail, or with a GitHub account. The code only lets this computer send a limited number of anonymous ballots each week, so that nobody else can flood the study; it does not identify your ballots."),
+    el("div", { class: "row" }, getCode),
     el("label", { class: "check" }, domains,
-      el("span", {}, "Also share the domain names that non-browser applications contact (e.g. Teams contacting teams.microsoft.com). Browsing history is never collected. You can change this later.")),
+      el("span", {}, "Also share the server names (SNI) that non-browser applications connect to, each with its fingerprint (e.g. Teams connecting to teams.microsoft.com). Browsers' names are never collected: no browsing history. You can change this later.")),
     el("label", { class: "check" }, agree, el("span", {}, "I have read the study information and agree to take part. I can leave at any time from Settings.")),
     el("div", { class: "row" }, go),
   );
@@ -162,7 +166,7 @@ function reportCard() {
     } else if (r.state === "sending") {
       body.push(el("div", { class: "big ok" }, `Sending: ${r.sent} / ${r.total}`));
       body.push(el("progress", { max: r.total, value: r.sent }));
-      body.push(el("p", { class: "muted small" }, `${r.real.length} real items and ${r.decoys} decoys, one anonymous ballot each, at random times.`));
+      body.push(el("p", { class: "muted small" }, `${r.real.length} items, one anonymous ballot each, at random times.`));
     } else if (r.state === "sent") {
       body.push(el("div", { class: "big ok" }, "Sent"), el("p", { class: "muted" }, `${r.total} ballots on ${when(r.finished)}.`));
     } else {
@@ -194,7 +198,7 @@ function renderOverview() {
 
 function describe(item) {
   if (item.type === "hello") return [`${item.transport.toUpperCase()} handshake`, el("div", { class: "mono" }, item.ja4)];
-  if (item.type === "domain") return ["contacted", el("div", { class: "mono" }, item.domain)];
+  if (item.type === "domain") return [`${item.ja4.startsWith("q") ? "QUIC" : "TCP"} connection to`, el("div", { class: "mono" }, item.domain), el("div", { class: "mono muted small" }, item.ja4)];
   return [item.type];
 }
 
@@ -230,11 +234,11 @@ function renderItems() {
     el("table", {},
       el("thead", {}, el("tr", {}, el("th", {}, "Send"), el("th", {}, "Application"), el("th", {}, "What"), el("th", {}, "Seen ¹"), el("th", {}, "Processes ¹"))),
       el("tbody", {}, rows.length ? rows : el("tr", {}, el("td", { colspan: 5, class: "muted" }, "Nothing yet.")))),
-    el("p", { class: "muted small" }, "¹ Stays on this computer. Only the application, its version, the OS family and the fingerprint (or domain) are sent, once per week, not how often."),
+    el("p", { class: "muted small" }, "¹ Stays on this computer. Only the application, its version, the OS family and the fingerprint (with the server name, if you share them) are sent, once per week, not how often."),
     el("p", { class: "muted small" },
       `Not collected: ${sk.unattributed} handshakes with no known application; ${sk.browser_domains} names contacted by browsers (browsing history is never collected)` +
-      (state.settings.share_domains ? `; ${sk.private_domains} local or private names.` : `; ${sk.domains_off} domain names (sharing is off).`)),
-    el("p", { class: "muted small" }, "Items the server already knows are sent with randomized response: some of your items are left out and some you did not see are added, so no ballot proves you use an application."),
+      (state.settings.share_domains ? `; ${sk.private_domains} local or private names; ${sk.not_sni} names seen only in DNS or plain HTTP.` : `; ${sk.domains_off} server names (sharing is off).`)),
+    el("p", { class: "muted small" }, "Each ticked item goes as a separate anonymous ballot: the server cannot tell which items come from the same person. An item is published only once enough participants reported it."),
   );
 }
 
@@ -247,10 +251,10 @@ function renderHistory() {
       el("div", { class: "row flush" },
         el("strong", {}, `Week of ${weekRange(r.from, r.to)}`),
         el("span", { class: "chip" }, r.state)),
-      r.total ? el("p", { class: "muted" }, `${r.sent}/${r.total} ballots: ${r.real.length} real items, ${r.decoys} decoys, ${r.withheld} left out by randomized response${r.dropped ? `, ${r.dropped} over the token budget` : ""}.`) : null,
+      r.total ? el("p", { class: "muted" }, `${r.sent}/${r.total} ballots: ${r.real.length} items and one "took part" ballot${r.dropped ? `; ${r.dropped} items over the token budget were left out` : ""}.`) : null,
       r.error ? el("p", { class: "small bad" }, r.error) : null,
       r.real.length ? el("details", {}, el("summary", {}, "Real items sent"),
-        el("ul", { class: "plain small" }, ...r.real.map((i) => el("li", {}, i.app ? `${i.app.name} ${i.app.version || ""} — ${i.type === "hello" ? i.ja4 : i.domain}` : i.type)))) : null,
+        el("ul", { class: "plain small" }, ...r.real.map((i) => el("li", {}, i.app ? `${i.app.name} ${i.app.version || ""} — ${i.type === "hello" ? i.ja4 : `${i.domain} (${i.ja4})`}` : i.type)))) : null,
       r.key_id ? el("p", { class: "muted small" }, `Token key ${r.key_id}`) : null,
     )));
 }
@@ -259,16 +263,14 @@ function renderHistory() {
 
 function renderPrivacy() {
   const c = state.config;
-  const eps = state.epsilon_local;
   return el("div", { class: "card" },
     el("h2", {}, "How your data is protected"),
     el("ul", { class: "plain" },
-      el("li", {}, el("strong", {}, "Little leaves your computer. "), "Per week: which applications (name, version, kind) sent which handshake fingerprint, on which OS family. Optional: domains contacted by non-browser applications. No addresses, times, counts, file paths, user or host names."),
+      el("li", {}, el("strong", {}, "Little leaves your computer. "), "Per week: which applications (name, version, kind) sent which handshake fingerprint, on which OS family. Optional: the server names (SNI) non-browser applications connect to, with the fingerprint used. No addresses, times, counts, file paths, user or host names."),
       el("li", {}, el("strong", {}, "You review it first. "), `Each week's list waits ${state.settings.review_hours} hours before it is sent; untick anything.`),
       el("li", {}, el("strong", {}, "Anonymous ballots. "), "Every item is a separate ballot carrying a token the server signed without seeing it (blind signature, as in anonymous e-voting). The server knows the ballot comes from an enrolled participant, not which one, nor which ballots come from the same person."),
-      el("li", {}, el("strong", {}, "Hidden address. "), state.settings.relay ? "Ballots go through a relay run by another party: the relay sees your address but not the content; the server sees the content but not your address." : "No relay is configured: the server could see your address when ballots arrive."),
-      el("li", {}, el("strong", {}, "Plausible deniability. "), c ? `Items already known are reported with randomized response (p = ${c.rr_p.toFixed(2)}, ε = ${eps.toFixed(2)} per item and week): some of yours are left out, some you did not have are added.` : "Randomized response on known items."),
-      el("li", {}, el("strong", {}, "Thresholds. "), c ? `The study publishes an item only once at least ${c.k_hello} participants reported it (${c.k_domain} for domains), with Laplace noise (ε = ${c.epsilon_central}).` : "Items are published only above a participant threshold."),
+      el("li", {}, el("strong", {}, "Hidden address. "), state.settings.relay ? "Ballots go through a relay: it sees your address but not the content; the server sees the content but not your address. This hides who sends what as long as the relay and the server are run by different parties." : "No relay is configured: the server could see your address when ballots arrive."),
+      el("li", {}, el("strong", {}, "Thresholds. "), c ? `The study publishes an item only once at least ${c.k_hello} participants reported it in the same week (${c.k_domain} for server names).` : "Items are published only above a participant threshold."),
       el("li", {}, el("strong", {}, "Counts only. "), "The server keeps one counter per item and week: no individual ballots, no arrival times."),
       el("li", {}, el("strong", {}, "Local logs. "), "The capture logs stay on this computer and are deleted after two weeks."),
     ),
@@ -304,7 +306,7 @@ function renderSettings() {
     el("div", { class: "card" },
       el("h2", {}, "Sending"),
       el("label", { class: "field" }, el("span", {}, "Relay"), relay),
-      el("label", { class: "check" }, domains, el("span", {}, "Share domains contacted by non-browser applications")),
+      el("label", { class: "check" }, domains, el("span", {}, "Share the server names (SNI) non-browser applications connect to")),
       el("label", { class: "field" }, el("span", {}, "Hours to review each week's report before it is sent"), review),
       el("label", { class: "field" }, el("span", {}, "Spread the ballots over (minutes)"), spread),
       el("div", { class: "row" }, save)),

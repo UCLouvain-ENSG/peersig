@@ -4,7 +4,9 @@
 
 pub mod api;
 pub mod db;
+pub mod enroll;
 pub mod release;
+pub mod web;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -20,11 +22,8 @@ use peersig_proto::{oblivious, EpochSpec};
 pub struct Settings {
     pub epochs: EpochSpec,
     pub tokens_per_epoch: u32,
-    /// Randomized response: probability of telling the truth.
-    pub rr_p: f64,
     pub k_hello: u32,
     pub k_domain: u32,
-    pub epsilon_central: f64,
     pub about_url: Option<String>,
 }
 

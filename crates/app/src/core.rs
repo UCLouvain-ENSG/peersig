@@ -3,9 +3,9 @@
 //! During epoch `e + 1` the app reports epoch `e`:
 //! 1. review: for `review_hours` the participant sees what will be sent
 //!    and can remove items;
-//! 2. prepare: fetch the frozen catalogue, apply randomized response, get
-//!    blind tokens (always the same number), and schedule each ballot at a
-//!    random time over the next `spread_minutes`;
+//! 2. prepare: get blind tokens (always the same number), and schedule
+//!    each item's ballot, and one presence ballot, at a random time over the
+//!    next `spread_minutes`;
 //! 3. send: one ballot per request, through the relay.
 //!
 //! Nothing is sent while the app is not running, so the participant always
@@ -22,7 +22,7 @@ use peersig_proto::item::{Observed, Skipped};
 use peersig_proto::plan;
 use peersig_proto::token;
 use peersig_proto::wire::{Ballot, Config, IssueRequest};
-use peersig_proto::{rr, Class, Item};
+use peersig_proto::Item;
 
 use crate::local::{self, ProbeStatus};
 use crate::probe;
@@ -30,6 +30,11 @@ use crate::probe;
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
+
+/// The study's collection server and relay, filled in on the join screen.
+/// Participants enrolled elsewhere keep the addresses they joined with.
+pub const DEFAULT_SERVER: &str = "https://peersig.org";
+pub const DEFAULT_RELAY: &str = "https://relay.peersig.org";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
@@ -49,8 +54,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            server: String::new(),
-            relay: String::new(),
+            server: DEFAULT_SERVER.into(),
+            relay: DEFAULT_RELAY.into(),
             code: String::new(),
             share_domains: false,
             review_hours: 24,
@@ -102,10 +107,6 @@ pub struct Report {
     #[serde(default)]
     pub real: Vec<Item>,
     #[serde(default)]
-    pub decoys: usize,
-    #[serde(default)]
-    pub withheld: usize,
-    #[serde(default)]
     pub dropped: usize,
     #[serde(default)]
     pub total: usize,
@@ -153,7 +154,6 @@ pub struct View {
     pub paused: bool,
     pub os: &'static str,
     pub config: Option<Config>,
-    pub epsilon_local: Option<f64>,
     pub current: Option<Report>,
     pub reports: Vec<Report>,
     pub last_error: Option<String>,
@@ -163,7 +163,12 @@ pub struct View {
 impl Core {
     pub fn load(dir: &Path) -> Core {
         let path = dir.join("state.json");
-        let p = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let mut p: Persisted = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        // Saved before the defaults existed, and never enrolled.
+        if p.settings.server.is_empty() && p.settings.consented.is_none() {
+            p.settings.server = DEFAULT_SERVER.into();
+            p.settings.relay = DEFAULT_RELAY.into();
+        }
         Core { path, p, config: None, last_error: None, probe: ProbeStatus::default(), cache: local::Cache::default(), send_now: false }
     }
 
@@ -200,7 +205,6 @@ impl Core {
             paused: probe::is_paused(&self.p.settings.logs()),
             os: std::env::consts::OS,
             config: self.config.as_ref().map(|c| c.1.clone()),
-            epsilon_local: self.config.as_ref().map(|c| rr::epsilon(c.1.rr_p)),
             current: self.current_report().cloned(),
             reports: self.p.reports.values().rev().cloned().map(|mut r| {
                 r.queue.clear();
@@ -240,8 +244,6 @@ impl Core {
                 review_until,
                 send_by,
                 real: vec![],
-                decoys: 0,
-                withheld: 0,
                 dropped: 0,
                 total: 0,
                 sent: 0,
@@ -314,14 +316,13 @@ pub struct Prepared {
 pub async fn prepare(settings: &Settings, cfg: &Config, real: Vec<Item>) -> Result<Prepared> {
     let e = cfg.report_epoch;
     let mut client = settings.client()?;
-    // Fetched anonymously: the same catalogue and key everyone gets.
+    // Fetched anonymously: the same key everyone gets.
     let fresh = client.config().await.context("configuration")?;
     if fresh.report_epoch != e || fresh.token_key != cfg.token_key {
         bail!("the server's configuration changed; will retry");
     }
-    let cat = client.catalogue(e).await.context("catalogue")?;
     let budget = cfg.tokens_per_epoch as usize;
-    let pl = plan::plan(e, &real, &cat.items, cfg.rr_p, settings.share_domains, budget, &mut || rand::random::<f64>());
+    let pl = plan::plan(e, &real, settings.share_domains, budget, &mut || rand::random::<f64>());
     // Always the full budget: the server must not learn how many items we have.
     let blinded = token::blind(&cfg.token_key.public_key, e, budget)?;
     let resp = client
@@ -349,8 +350,6 @@ pub fn schedule(core: &mut Core, epoch: u32, p: Prepared, spread: i64) {
     queue.sort_by_key(|q| q.at);
     r.total = queue.len();
     r.real = p.real;
-    r.decoys = r.total - r.real.len() - queue.iter().filter(|q| q.ballot.item.class() == Class::Presence).count();
-    r.withheld = p.plan.withheld;
     r.dropped = p.plan.dropped;
     r.queue = queue;
     r.state = ReportState::Sending;
@@ -376,10 +375,8 @@ mod tests {
         let st = peersig_server::Settings {
             epochs: EpochSpec { origin: t0 - 1500, length: 1000 },
             tokens_per_epoch: 16,
-            rr_p: 0.9,
             k_hello: 1,
             k_domain: 1,
-            epsilon_central: 100.0,
             about_url: None,
         };
         let state = State::new(conn, st, system_clock()).unwrap();
@@ -404,8 +401,10 @@ mod tests {
             hello("Kept", "app", "t13d1516h2_8daaf6152771_e5627efa2ab1"),
             hello("Removed", "app", "t13d1516h2_8daaf6152771_000000000001"),
             hello("Nobody", "unknown", "t13d1516h2_8daaf6152771_000000000002"),
-            serde_json::json!({"type":"domain","last":ts,"app":"Microsoft Defender","app_kind":"app","domain":"eu-v20.events.data.microsoft.com","count":2}),
-            serde_json::json!({"type":"domain","last":ts,"app":"Safari","app_kind":"browser","domain":"news.example.org","count":1}),
+            serde_json::json!({"type":"domain","last":ts,"app":"Microsoft Defender","app_kind":"app","domain":"eu-v20.events.data.microsoft.com",
+                "via":["sni"],"ja4":["t13d3012h1_1d37bd780c83_882d495ac381"],"count":2}),
+            serde_json::json!({"type":"domain","last":ts,"app":"Safari","app_kind":"browser","domain":"news.example.org",
+                "via":["sni"],"ja4":["t13d1516h2_8daaf6152771_e5627efa2ab1"],"count":1}),
         ] {
             writeln!(f, "{}", v).unwrap();
         }
@@ -414,6 +413,7 @@ mod tests {
         let mut core = Core::load(&tmp);
         core.p.settings = Settings {
             server: url,
+            relay: String::new(),
             code: code.to_lowercase(),
             share_domains: true,
             review_hours: 0,
@@ -445,7 +445,7 @@ mod tests {
         }
         let r = core.p.reports.get(&0).unwrap();
         assert_eq!(r.state, ReportState::Sent);
-        assert_eq!((r.real.len(), r.decoys, r.total, r.sent), (2, 0, 3, 3));
+        assert_eq!((r.real.len(), r.total, r.sent), (2, 3, 3));
         core.save().unwrap();
 
         let counted: Vec<String> = {

@@ -14,7 +14,12 @@ product: a change that weakens one is a bug even if every test passes.
   stores counters, not ballots. Keep tables `WITHOUT ROWID` and the journal
   out of WAL mode.
 - Every participant asks for `tokens_per_epoch` tokens, whatever it sends.
-- The app fetches the config, the catalogue and the gateway key anonymously,
+- Web enrollment (`crates/server/src/enroll.rs`) keeps a keyed hash of the
+  e-mail address or GitHub id and a count, never the identity itself, and
+  nothing that links it to the code. Its pages answer alike whether or not
+  an address enrolled before. Network enrollment looks at the client's
+  address for that request only and keeps nothing about it.
+- The app fetches the config and the gateway key anonymously,
   and checks the token key and the gateway key as described in
   docs/privacy.md. Do not shortcut these checks.
 - The JA4 code (`crates/probe/src/fingerprint.rs`) follows FoxIO's spec and

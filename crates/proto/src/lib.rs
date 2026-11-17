@@ -9,8 +9,6 @@
 //! - [`oblivious`]: Oblivious HTTP (RFC 9458) framing. Ballots go through a
 //!   relay that sees the sender's address but not the content; the server
 //!   sees the content but not the address.
-//! - [`rr`]: randomized response over the public catalogue (local
-//!   differential privacy) and the server-side debiasing.
 //! - [`plan`]: turns a week's items into the shuffled list of ballots.
 //! - [`wire`]: API messages.
 //! - `client` (feature `client`): the HTTP client used by the app.
@@ -20,7 +18,6 @@ pub mod epoch;
 pub mod item;
 pub mod oblivious;
 pub mod plan;
-pub mod rr;
 pub mod token;
 pub mod wire;
 

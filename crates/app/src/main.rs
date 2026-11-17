@@ -401,17 +401,16 @@ async fn tick(app: &AppHandle, core: &Shared) {
             Ok(p) => {
                 let window = c.p.reports.get(&e).map(|r| r.send_by - now() - 600).unwrap_or(0).max(60);
                 let spread = if c.send_now { 300 } else { settings.spread_minutes as i64 * 60 }.min(window);
-                let (n, real_n) = (p.plan.ballots.len(), p.real.len());
+                let real_n = p.real.len();
                 core::schedule(&mut c, e, p, spread);
                 c.send_now = false;
                 let _ = c.save();
                 notify(
                     app,
                     &format!(
-                        "Sending your week's report: {} anonymous ballots over the next {} minutes ({} real items, the rest is noise).",
-                        n,
-                        (spread + 59) / 60,
-                        real_n
+                        "Sending your week's report: {} items, one anonymous ballot each, over the next {} minutes.",
+                        real_n,
+                        (spread + 59) / 60
                     ),
                 );
             }

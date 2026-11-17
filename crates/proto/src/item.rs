@@ -3,9 +3,10 @@
 //!
 //! A `hello` item is "an application of this name and version, on this OS,
 //! sent a ClientHello with this JA4". A `domain` item (only when the
-//! participant opts in, never for browsers) is "this application contacted
-//! this name". A `presence` item says "one participant reported this
-//! epoch"; the server counts them to debias randomized response.
+//! participant opts in, never for browsers) is "this application sent a
+//! ClientHello with this JA4 to this server name (SNI)": what a network
+//! observer sees together. A `presence` item says "one participant
+//! reported this epoch".
 //!
 //! Never part of an item: addresses, ports, times, process ids, paths,
 //! command lines, host or user names. Items carry presence, not counts.
@@ -74,8 +75,11 @@ pub enum Item {
     Domain {
         os: String,
         app: AppRef,
-        /// Lower case, random-looking labels replaced by `*`.
+        /// The server name (SNI): lower case, random-looking labels
+        /// replaced by `*`.
         domain: String,
+        /// The JA4 of the ClientHello that carried it.
+        ja4: String,
     },
     Presence {
         shares_domains: bool,
@@ -107,7 +111,7 @@ impl Item {
             Item::Hello { os, transport, ja4, app, .. } => {
                 format!("{} {} via {} on {}: {}", app_label(app), app.kind, transport, os, ja4)
             }
-            Item::Domain { os, app, domain } => format!("{} on {} contacted {}", app_label(app), os, domain),
+            Item::Domain { os, app, domain, ja4 } => format!("{} on {} sent {} to {}", app_label(app), os, ja4, domain),
             Item::Presence { shares_domains } => {
                 format!("one participant reported{}", if *shares_domains { ", sharing domains" } else { "" })
             }
@@ -132,9 +136,12 @@ impl Item {
                 }
                 check_app(app)
             }
-            Item::Domain { os, app, domain } => {
+            Item::Domain { os, app, domain, ja4 } => {
                 check_os(os)?;
                 check_app(app)?;
+                if !is_ja4(ja4) {
+                    return Err(format!("ja4 {:?}", ja4));
+                }
                 if app.kind == "browser" {
                     return Err("domains are never collected for browsers".into());
                 }
@@ -273,6 +280,9 @@ pub struct Skipped {
     pub private_domains: u64,
     /// Domains not collected because sharing them is off.
     pub domains_off: u64,
+    /// Names seen only through DNS or plain HTTP, never in a ClientHello:
+    /// not sent.
+    pub not_sni: u64,
 }
 
 /// Turns probe log records (`start`, `hello`, `domain`) into the items of
@@ -295,6 +305,15 @@ fn ts(v: &Value, field: &str) -> Option<i64> {
 /// (WhatsApp's starts with U+200E).
 fn invisible(c: char) -> bool {
     matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}')
+}
+
+/// A field that is a string or a list of strings.
+fn strings(v: &Value, k: &str) -> Vec<String> {
+    match v.get(k) {
+        Some(Value::String(s)) => vec![s.clone()],
+        Some(Value::Array(a)) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+        _ => vec![],
+    }
 }
 
 fn opt(v: &Value, k: &str) -> Option<String> {
@@ -385,18 +404,31 @@ impl Collector {
                     self.skipped.domains_off += 1;
                     return;
                 }
+                // Only names a ClientHello carried (SNI), each with its JA4.
+                let ja4s: Vec<String> = if strings(v, "via").iter().any(|s| s == "sni") {
+                    strings(v, "ja4").into_iter().filter(|j| is_ja4(j)).collect()
+                } else {
+                    vec![]
+                };
+                if ja4s.is_empty() {
+                    self.skipped.not_sni += 1;
+                    return;
+                }
                 let Some(domain) = opt(v, "domain").as_deref().and_then(normalize_domain) else {
                     self.skipped.private_domains += 1;
                     return;
                 };
                 let Some(name) = opt(v, "app") else { return };
-                let item = Item::Domain {
-                    os,
-                    app: AppRef { name, id: opt(v, "app_id"), version: None, team_id: None, kind, engine: None },
-                    domain,
-                };
                 let n = v.get("count").and_then(|c| c.as_u64()).unwrap_or(1).max(1);
-                self.add(item, t, opt(v, "proc"), n);
+                for ja4 in ja4s {
+                    let item = Item::Domain {
+                        os: os.clone(),
+                        app: AppRef { name: name.clone(), id: opt(v, "app_id"), version: None, team_id: None, kind: kind.clone(), engine: None },
+                        domain: domain.clone(),
+                        ja4,
+                    };
+                    self.add(item, t, opt(v, "proc"), n);
+                }
             }
             _ => {}
         }
@@ -438,7 +470,7 @@ mod tests {
             *ja4 = "t13d1516h2_8daaf6152771".into();
         }
         assert!(i.validate().is_err());
-        let d = Item::Domain { os: "macos 27".into(), app: app(), domain: "www.google.com".into() };
+        let d = Item::Domain { os: "macos 27".into(), app: app(), domain: "www.google.com".into(), ja4: "t13d1516h2_8daaf6152771_e5627efa2ab1".into() };
         assert!(d.validate().is_err(), "no domains for browsers");
         assert!(is_ja4("q13d0311h3_55b375c5d22e_5a1f323ef56d"));
         assert!(is_ja4("dd2d270800_a2460661a67a_36cef8aed422"));
@@ -484,5 +516,36 @@ mod tests {
             assert!(!k.contains(leaked), "{} in {}", leaked, k);
         }
         assert_eq!((skipped.unattributed, skipped.browser_domains, skipped.domains_off), (1, 1, 1));
+    }
+
+    /// Shared names: those a ClientHello carried, once per JA4; names seen
+    /// only through DNS or HTTP stay on the computer.
+    #[test]
+    fn server_names_with_their_ja4() {
+        let spec = EpochSpec { origin: 0, length: EpochSpec::WEEK };
+        let t = "2026-11-16T17:19:56.110282Z";
+        let e = spec.at(chrono::DateTime::parse_from_rfc3339(t).unwrap().timestamp()).unwrap();
+        let mut c = Collector::new(spec, e, true);
+        c.record(&json!({"type":"start","os":{"os":"macos","version":"27.0.1"}}));
+        let (tcp, quic) = ("t13d1516h2_8daaf6152771_806a8c22fdea", "q13d0311h3_55b375c5d22e_653d80c3fe9d");
+        c.record(&json!({"type":"domain","last":t,"app":"Microsoft Teams","app_kind":"app","domain":"teams.microsoft.com",
+            "via":["dns","sni"],"ja4":[tcp, quic],"ports":["tcp/443","udp/443"],"count":4}));
+        c.record(&json!({"type":"domain","last":t,"app":"Microsoft Teams","app_kind":"app","domain":"telemetry.example.com",
+            "via":["dns-query"],"count":1}));
+        c.record(&json!({"type":"domain","last":t,"app":"Microsoft Teams","app_kind":"app","domain":"printer.local",
+            "via":["sni"],"ja4":[tcp],"count":1}));
+        let (items, skipped) = c.finish();
+        let got: BTreeSet<(String, String)> = items
+            .iter()
+            .map(|o| match &o.item {
+                Item::Domain { domain, ja4, .. } => (domain.clone(), ja4.clone()),
+                other => panic!("{:?}", other),
+            })
+            .collect();
+        let want: BTreeSet<(String, String)> =
+            [tcp, quic].iter().map(|j| ("teams.microsoft.com".to_string(), j.to_string())).collect();
+        assert_eq!(got, want);
+        assert!(items.iter().all(|o| o.item.validate().is_ok()));
+        assert_eq!((skipped.not_sni, skipped.private_domains), (1, 1));
     }
 }

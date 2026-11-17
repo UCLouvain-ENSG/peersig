@@ -2,14 +2,14 @@
 //! (status, JSON) pair, so the same code serves direct requests and the
 //! requests decrypted by the Oblivious HTTP gateway. Ballots are only
 //! accepted through the gateway. No handler sees or logs the client
-//! address.
+//! address. The web page for people is in [`crate::web`].
 
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path, State as AxState};
+use axum::extract::{DefaultBodyLimit, State as AxState};
 use axum::http::{header, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Serialize;
@@ -19,7 +19,6 @@ use peersig_proto::token::{key_id, KEY_BITS};
 use peersig_proto::wire::*;
 
 use crate::db::{self, Spend};
-use crate::release;
 use crate::State;
 
 type Reply = (u16, Vec<u8>);
@@ -43,10 +42,6 @@ pub fn config(s: &State) -> Reply {
         Ok(i) => i,
         Err(e) => return internal(e),
     };
-    let rr_p = match release::frozen_catalogue(&mut s.db.lock().unwrap(), &s.settings, report) {
-        Ok((p, _)) => p,
-        Err(e) => return internal(e),
-    };
     let st = &s.settings;
     json(
         200,
@@ -57,29 +52,11 @@ pub fn config(s: &State) -> Reply {
             report_epoch: report,
             token_key: TokenKey { epoch: report, public_key: issuer.public_der().to_vec(), key_id: key_id(issuer.public_der()) },
             tokens_per_epoch: st.tokens_per_epoch,
-            rr_p,
             k_hello: st.k_hello,
             k_domain: st.k_domain,
-            epsilon_central: st.epsilon_central,
             about_url: st.about_url.clone(),
         },
     )
-}
-
-pub fn catalogue(s: &State, epoch: u32) -> Reply {
-    let Some((_, report)) = s.epochs() else { return err(503, "the collection has not started") };
-    if epoch > report {
-        return err(404, "no catalogue for this epoch yet");
-    }
-    let mut db = s.db.lock().unwrap();
-    // Past epochs are never frozen after the fact.
-    if epoch < report && matches!(db::frozen_p(&db, epoch), Ok(None)) {
-        return json(200, &Catalogue { epoch, items: vec![] });
-    }
-    match release::frozen_catalogue(&mut db, &s.settings, epoch) {
-        Ok((_, items)) => json(200, &Catalogue { epoch, items }),
-        Err(e) => internal(e),
-    }
 }
 
 pub fn released(s: &State) -> Reply {
@@ -159,10 +136,6 @@ fn dispatch(s: &State, method: &str, path: &str, body: &[u8]) -> Reply {
         ("GET", PATH_CONFIG) => config(s),
         ("GET", PATH_RELEASED) => released(s),
         ("POST", PATH_BALLOT) => ballot(s, body),
-        ("GET", p) if p.starts_with("/v1/catalogue/") => match p["/v1/catalogue/".len()..].parse() {
-            Ok(e) => catalogue(s, e),
-            Err(_) => err(404, "not found"),
-        },
         _ => err(404, "not found"),
     }
 }
@@ -197,40 +170,11 @@ async fn ohttp_h(AxState(s): AxState<Arc<State>>, body: Bytes) -> Response {
     }
 }
 
-async fn index(AxState(s): AxState<Arc<State>>) -> Html<String> {
-    let st = &s.settings;
-    let epoch = s.epochs().map(|(c, _)| c.to_string()).unwrap_or_else(|| "not started".into());
-    Html(format!(
-        r#"<!doctype html><meta charset="utf-8"><title>PeerSig</title>
-<style>body{{font:16px/1.5 system-ui,sans-serif;max-width:40em;margin:3em auto;padding:0 1em}}code{{background:#eee;padding:0 .2em}}</style>
-<h1>PeerSig collection server</h1>
-<p>This server collects which applications send which TLS fingerprints (JA4), from volunteers running the
-<a href="https://github.com/UCLouvain-ENSG/peersig">PeerSig</a> app.</p>
-<ul>
-<li>Each observation arrives as a separate anonymous ballot, through an Oblivious HTTP relay, with a blind-signed token: this server cannot tell who sent it, nor which ballots came from the same person.</li>
-<li>It stores counters per item and week only: no addresses, no arrival times, no individual ballots.</li>
-<li>Items known to the catalogue are reported with randomized response (p = {p:.2}, &epsilon; = {eps:.2} per item and week).</li>
-<li>An item is published once at least {kh} participants reported it ({kd} for domains), with Laplace noise (&epsilon; = {ec}).</li>
-</ul>
-<p>Current epoch: {epoch}. <a href="/v1/released">Released items</a> &middot; <a href="/v1/config">configuration</a>.</p>"#,
-        p = st.rr_p,
-        eps = peersig_proto::rr::epsilon(st.rr_p),
-        kh = st.k_hello,
-        kd = st.k_domain,
-        ec = st.epsilon_central,
-    ))
-}
-
 pub fn router(state: Arc<State>) -> Router {
     Router::new()
-        .route("/", get(index))
         .route("/healthz", get(|| async { "ok" }))
         .route(PATH_CONFIG, get(|AxState(s): AxState<Arc<State>>| blocking(move || config(&s))))
         .route(PATH_RELEASED, get(|AxState(s): AxState<Arc<State>>| blocking(move || released(&s))))
-        .route(
-            "/v1/catalogue/{epoch}",
-            get(|AxState(s): AxState<Arc<State>>, Path(e): Path<u32>| blocking(move || catalogue(&s, e))),
-        )
         .route(PATH_ISSUE, post(|AxState(s): AxState<Arc<State>>, body: Bytes| blocking(move || issue(&s, &body))))
         .route(
             PATH_OHTTP_KEYS,

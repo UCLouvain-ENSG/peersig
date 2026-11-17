@@ -9,10 +9,12 @@
 //!   when they arrived, nor from where. Tables are WITHOUT ROWID, the
 //!   journal is not a WAL and deleted pages are zeroed, so the file does
 //!   not keep the order ballots arrived in.
-//! - `token_keys`, `frozen`, `catalogue`, `meta`: keys, per-epoch
-//!   parameters and the catalogue snapshot each epoch randomized against.
+//! - `identities`: for codes handed out by the web page, a keyed hash of
+//!   the e-mail address or GitHub account and how many codes it got. Not
+//!   the address, not which code, not when.
+//! - `token_keys`, `meta`: the keys and the epoch layout.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -31,8 +33,10 @@ CREATE TABLE IF NOT EXISTS token_keys(epoch INTEGER PRIMARY KEY, secret BLOB NOT
 CREATE TABLE IF NOT EXISTS spent(epoch INTEGER NOT NULL, nonce BLOB NOT NULL, PRIMARY KEY(epoch, nonce)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS counts(epoch INTEGER NOT NULL, item TEXT NOT NULL, class TEXT NOT NULL, n INTEGER NOT NULL,
     PRIMARY KEY(epoch, item)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS frozen(epoch INTEGER PRIMARY KEY, rr_p REAL NOT NULL);
-CREATE TABLE IF NOT EXISTS catalogue(epoch INTEGER NOT NULL, item TEXT NOT NULL, PRIMARY KEY(epoch, item)) WITHOUT ROWID;
+-- Randomized response is gone: so are its catalogue snapshots.
+DROP TABLE IF EXISTS frozen;
+DROP TABLE IF EXISTS catalogue;
+CREATE TABLE IF NOT EXISTS identities(hash TEXT PRIMARY KEY, codes INTEGER NOT NULL) WITHOUT ROWID;
 ";
 
 pub fn open(path: &str) -> Result<Connection> {
@@ -105,6 +109,42 @@ pub fn revoke(c: &Connection, code_or_label: &str) -> Result<usize> {
     )?)
 }
 
+/// A new code labelled `<prefix><n>`, n counting all codes. Returns (code, label).
+pub fn add_labelled_code(c: &Connection, prefix: &str) -> Result<(String, String)> {
+    let total: u32 = c.query_row("SELECT COUNT(*) FROM codes", [], |r| r.get(0))?;
+    let code = new_code();
+    let label = format!("{}{:02}", prefix, total + 1);
+    add_code(c, &code, &label)?;
+    Ok((code, label))
+}
+
+/// A new code for `identity` (a keyed hash), labelled `<prefix><n>`, if
+/// it got fewer than `cap` codes so far. Returns (code, label).
+pub fn enroll(c: &mut Connection, identity: &str, prefix: &str, cap: u32) -> Result<Option<(String, String)>> {
+    let tx = c.transaction()?;
+    let had: u32 = tx.query_row("SELECT codes FROM identities WHERE hash = ?1", [identity], |r| r.get(0)).optional()?.unwrap_or(0);
+    if had >= cap {
+        return Ok(None);
+    }
+    let (code, label) = add_labelled_code(&tx, prefix)?;
+    tx.execute(
+        "INSERT INTO identities(hash, codes) VALUES(?1, 1) ON CONFLICT(hash) DO UPDATE SET codes = codes + 1",
+        [identity],
+    )?;
+    tx.commit()?;
+    Ok(Some((code, label)))
+}
+
+/// Undoes [`enroll`] when the code could not be delivered.
+pub fn unenroll(c: &mut Connection, identity: &str, code: &str) -> Result<()> {
+    let tx = c.transaction()?;
+    tx.execute("DELETE FROM codes WHERE hash = ?1", [code_hash(code)])?;
+    tx.execute("UPDATE identities SET codes = codes - 1 WHERE hash = ?1", [identity])?;
+    tx.execute("DELETE FROM identities WHERE hash = ?1 AND codes <= 0", [identity])?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub struct CodeRow {
     pub label: String,
     pub created: String,
@@ -175,65 +215,16 @@ pub fn count_ballot(c: &mut Connection, epoch: u32, nonce: &[u8], item: &Item) -
     Ok(Spend::Counted)
 }
 
-pub struct EpochCounts {
-    /// Presence ballots: participants who reported, and those who share domains.
-    pub n_all: f64,
-    pub n_domains: f64,
-    pub rr_p: Option<f64>,
-    pub catalogue: BTreeSet<String>,
-    /// item key -> (class, count)
-    pub items: BTreeMap<String, (String, f64)>,
-}
-
-/// Everything about the epochs before `until`.
-pub fn counts_before(c: &Connection, until: u32) -> Result<BTreeMap<u32, EpochCounts>> {
-    let mut out: BTreeMap<u32, EpochCounts> = BTreeMap::new();
-    let mut st = c.prepare("SELECT epoch, item, class, n FROM counts WHERE epoch < ?1")?;
-    let rows = st.query_map([until], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?)))?;
+/// Per epoch before `until`: item key -> count (presence ballots left out).
+pub fn counts_before(c: &Connection, until: u32) -> Result<BTreeMap<u32, BTreeMap<String, i64>>> {
+    let mut out: BTreeMap<u32, BTreeMap<String, i64>> = BTreeMap::new();
+    let mut st = c.prepare("SELECT epoch, item, n FROM counts WHERE epoch < ?1 AND class != ?2")?;
+    let rows = st.query_map(params![until, Class::Presence.name()], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?;
     for row in rows {
-        let (e, item, class, n) = row?;
-        let ec = out.entry(e).or_insert_with(|| EpochCounts {
-            n_all: 0.0,
-            n_domains: 0.0,
-            rr_p: None,
-            catalogue: BTreeSet::new(),
-            items: BTreeMap::new(),
-        });
-        if class == Class::Presence.name() {
-            ec.n_all += n as f64;
-            if item == (Item::Presence { shares_domains: true }).key() {
-                ec.n_domains += n as f64;
-            }
-        } else {
-            ec.items.insert(item, (class, n as f64));
-        }
-    }
-    for (e, ec) in out.iter_mut() {
-        ec.rr_p = frozen_p(c, *e)?;
-        ec.catalogue = catalogue(c, *e)?.into_iter().collect();
+        let (e, item, n) = row?;
+        out.entry(e).or_default().insert(item, n);
     }
     Ok(out)
-}
-
-pub fn frozen_p(c: &Connection, epoch: u32) -> Result<Option<f64>> {
-    Ok(c.query_row("SELECT rr_p FROM frozen WHERE epoch = ?1", [epoch], |r| r.get(0)).optional()?)
-}
-
-pub fn catalogue(c: &Connection, epoch: u32) -> Result<Vec<String>> {
-    let mut st = c.prepare("SELECT item FROM catalogue WHERE epoch = ?1 ORDER BY item")?;
-    let v = st.query_map([epoch], |r| r.get(0))?.collect::<Result<_, _>>()?;
-    Ok(v)
-}
-
-pub fn freeze(c: &mut Connection, epoch: u32, rr_p: f64, items: &[String]) -> Result<()> {
-    let tx = c.transaction()?;
-    if tx.execute("INSERT OR IGNORE INTO frozen(epoch, rr_p) VALUES(?1, ?2)", params![epoch, rr_p])? == 1 {
-        for i in items {
-            tx.execute("INSERT OR IGNORE INTO catalogue(epoch, item) VALUES(?1, ?2)", params![epoch, i])?;
-        }
-    }
-    tx.commit()?;
-    Ok(())
 }
 
 pub struct EpochStats {

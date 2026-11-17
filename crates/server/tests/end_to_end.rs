@@ -27,8 +27,7 @@ async fn participate(url: &str, code: &str, real: &[Item]) -> anyhow::Result<usi
     let mut c = Client::new(url, None)?;
     let cfg = c.config().await?;
     let epoch = cfg.report_epoch;
-    let cat = c.catalogue(epoch).await?;
-    let pl = plan(epoch, real, &cat.items, cfg.rr_p, false, cfg.tokens_per_epoch as usize, &mut || rand::random::<f64>());
+    let pl = plan(epoch, real, false, cfg.tokens_per_epoch as usize, &mut || rand::random::<f64>());
     let blinded = token::blind(&cfg.token_key.public_key, epoch, cfg.tokens_per_epoch as usize)?;
     let req = IssueRequest { code: code.into(), epoch, blinded: blinded.iter().map(|b| b.blind_message.clone()).collect() };
     let resp = c.issue(&req).await?;
@@ -56,10 +55,8 @@ async fn enroll_vote_release() {
     let settings = Settings {
         epochs: EpochSpec { origin: 0, length: 1000 },
         tokens_per_epoch: TOKENS,
-        rr_p: 0.9,
         k_hello: 3,
         k_domain: 5,
-        epsilon_central: 100.0, // tiny noise: the test checks thresholds
         about_url: None,
     };
     let state = State::new(conn, settings, clock).unwrap();
@@ -127,12 +124,11 @@ async fn enroll_vote_release() {
     let keys: Vec<String> = rel.items.iter().map(|i| i.item.key()).collect();
     assert!(keys.contains(&common.key()), "{:?}", keys);
     assert!(!keys.contains(&rare.key()));
+    // Supports are exact: 4 participants plus the extra ballot of the double-spend check.
+    assert_eq!(rel.items.iter().find(|i| i.item == common).map(|i| i.support), Some(5));
 
-    // Epoch 1's catalogue (used now) holds the common item: randomized response applies.
     let cfg = c.config().await.unwrap();
     assert_eq!(cfg.report_epoch, 1);
-    let cat = c.catalogue(1).await.unwrap();
-    assert_eq!(cat.items, vec![common.clone()]);
     // Ballots for the wrong epoch are refused.
     let b = token::blind(&cfg.token_key.public_key, 0, 1).unwrap();
     let e = c.issue(&IssueRequest { code: codes[0].clone(), epoch: 0, blinded: vec![b[0].blind_message.clone()] }).await.unwrap_err();

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PeerSig",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "be.uclouvain.peersig",
   "build": { "frontendDist": "ui" },
   "app": {
@@ -18,11 +18,11 @@
     "shortDescription": "Volunteer measurement: which apps send which TLS fingerprints",
     "longDescription": "PeerSig ties the TLS/QUIC fingerprints (JA4) your computer sends to the applications that send them, and contributes them to a research study as anonymous ballots.",
     "copyright": "UCLouvain",
-    "license": "Apache-2.0 OR MIT",
-    "homepage": "https://github.com/UCLouvain-ENSG/peersig",
+    "license": "Apache-2.0",
+    "homepage": "https://peersig.org",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "externalBin": ["binaries/peersig-probe"],
-    "macOS": { "minimumSystemVersion": "12.0" },
+    "macOS": { "minimumSystemVersion": "12.0", "signingIdentity": "-" },
     "linux": { "deb": { "depends": ["libpcap0.8"], "postInstallScript": "packaging/deb-postinst.sh" } }
   }
 }
