@@ -90,9 +90,22 @@ async fn code_by_mail() {
     let url = serve(api::router(state.clone()).merge(web::router(Arc::new(web::Web { state: state.clone(), enroll: e, notice: None })))).await;
     let http = reqwest::Client::new();
 
-    let home = http.get(&url).send().await.unwrap().text().await.unwrap();
+    let home = http.get(format!("{}/participate", url)).send().await.unwrap().text().await.unwrap();
     assert!(home.contains(r#"action="/enroll/mail""#) && home.contains("flood"), "{}", home);
     assert!(home.contains("mailto:team@example.org"));
+
+    // The home page and its assets, under a policy that allows no inline script.
+    let r = http.get(&url).send().await.unwrap();
+    let csp = r.headers()["content-security-policy"].to_str().unwrap().to_string();
+    assert!(csp.contains("script-src 'self'") && !csp.contains("unsafe-inline"), "{}", csp);
+    let index = r.text().await.unwrap();
+    assert!(index.contains(r#"href="/participate""#) && !index.contains("{{"), "unfilled placeholder");
+    for (a, kind) in [("site.css", "text/css"), ("site.js", "text/javascript"), ("hero.js", "text/javascript"), ("logo.svg", "image/svg+xml")] {
+        let r = http.get(format!("{}/assets/{}", url, a)).send().await.unwrap();
+        assert_eq!(r.status(), 200, "{}", a);
+        assert!(r.headers()["content-type"].to_str().unwrap().starts_with(kind), "{}", a);
+    }
+    assert!(!home.contains("{{"), "unfilled placeholder");
     assert!(!home.contains("/enroll/github"), "GitHub is not configured");
 
     let post = |email: &str| http.post(format!("{}/enroll/mail", url)).form(&[("email", email)]).send();
@@ -186,7 +199,7 @@ async fn code_with_github() {
     let url = serve(api::router(state.clone()).merge(web::router(Arc::new(web::Web { state: state.clone(), enroll: e, notice: None })))).await;
     let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
 
-    let home = http.get(&url).send().await.unwrap().text().await.unwrap();
+    let home = http.get(format!("{}/participate", url)).send().await.unwrap().text().await.unwrap();
     assert!(home.contains("/enroll/github") && !home.contains("/enroll/mail"));
 
     let back = |code: &str, st: &str| {
@@ -232,8 +245,8 @@ async fn code_from_the_network() {
     let url = serve_with_peer(api::router(state.clone()).merge(web::router(Arc::new(web::Web { state: state.clone(), enroll: e, notice: None })))).await;
     let http = reqwest::Client::new();
 
-    let home = http.get(&url).send().await.unwrap().text().await.unwrap();
-    assert!(home.contains("From the UCLouvain network") && home.contains(r#"action="/enroll/network""#));
+    let home = http.get(format!("{}/participate", url)).send().await.unwrap().text().await.unwrap();
+    assert!(home.contains("On the UCLouvain network") && home.contains(r#"action="/enroll/network""#));
 
     // The proxy on this machine (the test client, from 127.0.0.1) says who
     // the visitor is; only the last entry counts.
