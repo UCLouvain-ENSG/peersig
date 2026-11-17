@@ -151,8 +151,10 @@ The released list is also public at `/v1/released`.
 
 Pushing a tag `v<version>` runs `.github/workflows/release.yml`:
 
-- the macOS app (Apple Silicon and Intel: `.dmg`) and the Linux app (`.deb`,
-  `.AppImage`), each with the probe inside;
+- the macOS app (Apple Silicon and Intel: `.dmg`), the Linux app (`.deb`,
+  `.AppImage`) and the Windows app (`.msi`, x64), each with the probe
+  inside (on Windows it uses the system's packet capture: nothing else to
+  install);
 - `peersig-server`, `peersig-relay` and `peersig-probe` for Linux x86_64;
 - `SHA256SUMS`.
 

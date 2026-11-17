@@ -138,6 +138,7 @@ pub fn parse_pktap(d: &[u8]) -> Option<(PktapMeta, i32, usize)> {
 /// - with `dns`, inbound UDP from port 53, for the answers that name
 ///   connections. The IP header is found from the inner link type at offset
 ///   8 (Ethernet, loopback/utun, raw IP) and the header length at offset 0.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn pktap_filter(dns: bool) -> String {
     let out = "link[36] & 2 != 0".to_string();
     if !dns {

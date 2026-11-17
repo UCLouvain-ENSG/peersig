@@ -4,3 +4,5 @@ building the app:
 
     cargo build --release -p peersig-probe
     cp target/release/peersig-probe crates/app/binaries/peersig-probe-$(rustc -vV | sed -n 's/host: //p')
+
+On Windows the file is `peersig-probe-x86_64-pc-windows-msvc.exe`.

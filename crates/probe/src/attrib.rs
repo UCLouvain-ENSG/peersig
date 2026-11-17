@@ -12,14 +12,20 @@
 //! `app` is the application credited with the traffic: the delegating
 //! process if any, then its responsible app when it is an XPC service or a
 //! helper inside that app, then the outermost `.app` around it.
+//!
+//! On Windows, `resp` is the app a WebView2 process works for, or the
+//! browser process of a Chromium or Electron child; the app is named by its
+//! executable's version resource, and a svchost process by the services it
+//! runs.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::binary::{self, Signing};
+use crate::binary::{self, Signing, VersionInfo};
 use crate::bundle::{self, Bundle, Bundles, Engine, Package};
 use crate::net::{FlowKey, PktapMeta};
 use crate::platform;
@@ -56,7 +62,10 @@ pub struct AppsDb {
 
 impl AppsDb {
     pub fn load() -> AppsDb {
-        let f: AppsFile = toml::from_str(include_str!("../data/apps.toml")).expect("data/apps.toml");
+        let mut f: AppsFile = toml::from_str(include_str!("../data/apps.toml")).expect("data/apps.toml");
+        for s in &mut f.stack {
+            s.pattern = lib_key(&s.pattern).into_owned();
+        }
         AppsDb { version: f.version, resolvers: f.resolvers, browsers: f.browser, stacks: f.stack }
     }
 
@@ -75,6 +84,7 @@ impl AppsDb {
     fn stacks_of<'a>(&self, libs: impl Iterator<Item = &'a str>) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for l in libs {
+            let l = lib_key(l);
             for s in &self.stacks {
                 if l.contains(&s.pattern) && !out.contains(&s.stack) {
                     out.push(s.stack.clone());
@@ -85,7 +95,19 @@ impl AppsDb {
     }
 
     fn is_stack_lib(&self, l: &str) -> bool {
+        let l = lib_key(l);
         self.stacks.iter().any(|s| l.contains(&s.pattern))
+    }
+}
+
+/// A library path or stack pattern, as they are compared: lower case on
+/// Windows, where paths and DLL names come in any case
+/// (`C:\WINDOWS\System32\SCHANNEL.dll`, `WINHTTP.dll` in an import table).
+fn lib_key(lib: &str) -> Cow<'_, str> {
+    if cfg!(windows) {
+        Cow::Owned(lib.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(lib)
     }
 }
 
@@ -113,6 +135,12 @@ pub struct ExeInfo {
     /// TLS stacks and runtimes from the linked libraries.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub linked_stacks: Vec<String>,
+    /// Windows: the executable's version resource.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_info: Option<VersionInfo>,
+    /// Windows: gui or console.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subsystem: Option<String>,
 }
 
 impl ExeInfo {
@@ -126,6 +154,31 @@ impl ExeInfo {
     pub fn file_name(&self) -> String {
         Path::new(&self.path).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
     }
+}
+
+/// `chrome.exe` -> `chrome`: Windows file names as app names.
+fn without_exe(name: &str) -> String {
+    match name.len().checked_sub(4) {
+        Some(i) if name.is_char_boundary(i) && name[i..].eq_ignore_ascii_case(".exe") => name[..i].to_string(),
+        _ => name.to_string(),
+    }
+}
+
+/// Product name from a Windows version resource; none for the generic
+/// "Microsoft Windows Operating System" of every OS binary.
+fn product_name(v: &VersionInfo) -> Option<String> {
+    if v.is_os_component() {
+        return None;
+    }
+    v.product.clone().or_else(|| v.description.clone()).filter(|s| !s.trim().is_empty())
+}
+
+/// A svchost process runs one service (since Windows 10 1703 with enough
+/// memory), sometimes a few. With many, which one sent a ClientHello
+/// cannot be told.
+fn is_service_host(p: &Process) -> bool {
+    let exe = p.exe.as_ref().map(|e| e.file_name()).unwrap_or_else(|| p.name.clone());
+    exe.eq_ignore_ascii_case("svchost.exe") && !p.services.is_empty() && p.services.len() <= 3
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -150,6 +203,9 @@ pub struct Process {
     pub script: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub responsible: Option<i32>,
+    /// Windows services running in the process (svchost).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<String>,
     /// TLS and runtime libraries mapped in the process (outside the shared cache).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tls_libs: Vec<String>,
@@ -172,6 +228,7 @@ impl Process {
             helper: None,
             script: None,
             responsible: None,
+            services: Vec::new(),
             tls_libs: Vec::new(),
             stacks: Vec::new(),
             exe: None,
@@ -275,9 +332,17 @@ impl Resolver {
         let p = Path::new(path);
         let bin = binary::inspect(p).unwrap_or_default();
         let bundles = self.bundles.chain(p);
-        let engine = self.bundles.engine(p, &bundles);
+        let mut engine = self.bundles.engine(p, &bundles);
+        if cfg!(windows) && engine.is_none() {
+            let v = bin.version.as_ref().and_then(|v| v.version());
+            engine = bundle::windows_engine(p, v.as_deref());
+        }
         let embedded = bin.info_plist.as_ref().map(|d| Bundle::from_dict("embedded", path, d));
         let linked_stacks = self.db.stacks_of(bin.libs.iter().map(String::as_str));
+        let mut package = bundle::package_of(path);
+        if let Some(pk) = package.as_mut().filter(|pk| pk.manager == "msix") {
+            pk.display_name = bundle::msix_display_name(path);
+        }
         let e = Arc::new(ExeInfo {
             path: path.to_string(),
             uuid: bin.uuid,
@@ -287,8 +352,10 @@ impl Resolver {
             engine,
             go: bin.go_version,
             go_main: bin.go_main,
-            package: bundle::package_of(path),
+            package,
             linked_stacks,
+            version_info: bin.version,
+            subsystem: bin.subsystem,
         });
         self.exes.insert(path.to_string(), e.clone());
         e
@@ -338,18 +405,26 @@ impl Resolver {
                 stacks.push("go".into());
             }
         }
-        let start = chrono::DateTime::from_timestamp_micros(basic.start_us as i64).map(|t| t.to_rfc3339());
+        // A svchost started as `-k <group> -s <service>` runs that service.
+        let mut services = platform::services(pid);
+        if services.is_empty() && exe.as_ref().is_some_and(|e| e.file_name().eq_ignore_ascii_case("svchost.exe")) {
+            services = args.windows(2).filter(|w| w[0] == "-s").map(|w| w[1].clone()).collect();
+        }
+        let start = (basic.start_us > 0)
+            .then(|| chrono::DateTime::from_timestamp_micros(basic.start_us as i64).map(|t| t.to_rfc3339()))
+            .flatten();
         let p = Arc::new(Process {
             id,
             pid,
             ppid: Some(basic.ppid),
-            uid: Some(basic.uid),
+            uid: basic.uid,
             start,
             name: basic.name,
             alive: true,
             helper,
             script,
             responsible: platform::responsible_pid(pid).filter(|r| *r != pid),
+            services,
             tls_libs,
             stacks,
             exe,
@@ -438,28 +513,53 @@ impl Resolver {
         let app_b = exe.and_then(|e| e.app_bundle());
         let embedded = exe.and_then(|e| e.embedded.as_ref());
         let signing = exe.and_then(|e| e.signing.as_ref());
-        let name = app_b
-            .map(|b| b.display_name())
-            .or_else(|| exe.map(|e| e.file_name()))
-            .unwrap_or_else(|| p.name.clone());
+        let vinfo = exe.and_then(|e| e.version_info.as_ref());
+        let package = exe.and_then(|e| e.package.as_ref());
+        // Windows service hosts are named after their services (BITS,
+        // wuauserv, DoSvc): the service names, which are never translated.
+        let service = is_service_host(p).then(|| p.services.join("+"));
+        // An MSIX app's package says its name and version better than its
+        // executable (WhatsApp's is "WhatsApp.Root 1.0.0").
+        let msix = package.filter(|pk| pk.manager == "msix");
+        let name = service
+            .clone()
+            .or_else(|| app_b.map(|b| b.display_name()))
+            .or_else(|| msix.and_then(|pk| pk.display_name.clone()))
+            .or_else(|| vinfo.and_then(product_name))
+            .or_else(|| exe.map(|e| without_exe(&e.file_name())))
+            .unwrap_or_else(|| without_exe(&p.name));
         let id = app_b
             .and_then(|b| b.id.clone())
             .or_else(|| embedded.and_then(|b| b.id.clone()))
-            .or_else(|| signing.and_then(|s| s.identifier.clone()));
+            .or_else(|| signing.and_then(|s| s.identifier.clone()))
+            .or_else(|| package.and_then(|pk| pk.family.clone()));
         let version = app_b
             .and_then(|b| b.best_version())
             .or_else(|| embedded.and_then(|b| b.best_version()))
-            .or_else(|| exe.and_then(|e| e.package.as_ref()).and_then(|pk| pk.version.clone()))
+            .or_else(|| msix.and_then(|pk| pk.version.clone()))
+            .or_else(|| vinfo.and_then(|v| v.version()))
+            .or_else(|| package.and_then(|pk| pk.version.clone()))
             .or_else(|| exe.and_then(|e| e.go.clone()));
         let path = app_b.map(|b| b.path.clone()).or_else(|| exe.map(|e| e.path.clone()));
-        let browser = self.db.browser(id.as_deref(), &name);
+        // By bundle id or name, then (Windows, Linux) by executable name.
+        let browser = self
+            .db
+            .browser(id.as_deref(), &name)
+            .or_else(|| self.db.browser(None, &exe.map(|e| e.file_name()).unwrap_or_else(|| p.name.clone())))
+            .or_else(|| unlisted_chromium_browser(exe));
         let system = signing.map_or(false, |s| s.platform)
-            || path.as_deref().map_or(false, |p| SYSTEM_PREFIXES.iter().any(|s| p.starts_with(s)));
+            || path.as_deref().map_or(false, |p| SYSTEM_PREFIXES.iter().any(|s| p.starts_with(s)) || is_windows_system(p))
+            || service.is_some()
+            // Windows components outside %SystemRoot% (Defender's platform
+            // in ProgramData). The product name is not signed: a label only.
+            || vinfo.is_some_and(|v| v.is_os_component());
+        // Windows has no bundles: a GUI executable is an app.
+        let gui = exe.and_then(|e| e.subsystem.as_deref()) == Some("gui");
         let kind = if browser.is_some() {
             "browser"
         } else if system {
             "system"
-        } else if app_b.is_some() {
+        } else if app_b.is_some() || gui {
             "app"
         } else if exe.is_some() {
             "cli"
@@ -482,13 +582,50 @@ impl Resolver {
     }
 }
 
+/// Windows: an executable installed the way Chromium browsers are (a
+/// version directory with chrome.dll or msedge.dll), but not in
+/// apps.toml: a browser all the same (Whale, Yandex, Thorium...), so that
+/// the names it contacts are never collected. Electron and CEF apps, and
+/// the WebView2 runtime, are installed otherwise.
+fn unlisted_chromium_browser(exe: Option<&ExeInfo>) -> Option<String> {
+    let e = exe?;
+    let en = e.engine.as_ref()?;
+    let browser_layout = en.name == "chromium" && en.via.ends_with(".dll");
+    (browser_layout && !e.file_name().eq_ignore_ascii_case("msedgewebview2.exe")).then(|| "chromium".to_string())
+}
+
+/// Windows: a file under %SystemRoot%.
+fn is_windows_system(path: &str) -> bool {
+    #[cfg(windows)]
+    {
+        platform::is_system_path(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 /// An XPC service, app extension, WebKit process or helper inside the
 /// responsible app works for it; a command run from Terminal does not work
-/// for Terminal.
+/// for Terminal. On Windows, a WebView2 process works for its host, and a
+/// process of the same executable as its responsible process (a Chromium
+/// or Electron child) for that process.
 fn works_for(p: &Process, resp: &Process) -> bool {
     let Some(e) = p.exe.as_deref() else { return false };
     if matches!(e.innermost_kind(), Some("xpc") | Some("appex")) || e.file_name().starts_with("com.apple.WebKit.") {
         return true;
+    }
+    if cfg!(windows) {
+        if e.file_name().eq_ignore_ascii_case("msedgewebview2.exe") {
+            return true;
+        }
+        if let Some(r) = resp.exe.as_deref() {
+            if e.path.eq_ignore_ascii_case(&r.path) {
+                return true;
+            }
+        }
     }
     match resp.exe.as_deref().and_then(|r| r.app_bundle()) {
         Some(b) => e.path.starts_with(&format!("{}/", b.path)),
@@ -505,7 +642,9 @@ fn is_code_file(p: &str) -> bool {
     let name = p.rsplit('/').next().unwrap_or(p);
     match name.rsplit_once('.') {
         None => true,
-        Some((_, ext)) => matches!(ext, "dylib" | "so" | "bundle" | "node") || name.contains(".so."),
+        Some((_, ext)) => {
+            matches!(ext, "dylib" | "so" | "bundle" | "node") || name.contains(".so.") || ext.eq_ignore_ascii_case("dll")
+        }
     }
 }
 
@@ -573,6 +712,75 @@ mod tests {
             chromium_helper(&a(&["Helper", "--type=utility", "--utility-sub-type=network.mojom.NetworkService"])).as_deref(),
             Some("utility:network.mojom.NetworkService")
         );
+    }
+
+    fn exe(path: &str, product: Option<&str>, version: &str, gui: bool) -> Arc<ExeInfo> {
+        let mut package = bundle::package_of(path);
+        if let Some(pk) = package.as_mut().filter(|pk| pk.manager == "msix") {
+            pk.display_name = Some("Microsoft Teams".into());
+        }
+        Arc::new(ExeInfo {
+            path: path.into(),
+            uuid: None,
+            signing: None,
+            bundles: vec![],
+            embedded: None,
+            engine: None,
+            go: None,
+            go_main: None,
+            package,
+            linked_stacks: vec![],
+            version_info: Some(VersionInfo {
+                product: product.map(str::to_string),
+                product_version: Some(version.into()),
+                ..Default::default()
+            }),
+            subsystem: Some(if gui { "gui" } else { "console" }.into()),
+        })
+    }
+
+    fn process(e: Arc<ExeInfo>, services: &[&str]) -> Process {
+        let mut p = Process::stub("1@1".into(), 1, &e.file_name());
+        p.exe = Some(e);
+        p.services = services.iter().map(|s| s.to_string()).collect();
+        p
+    }
+
+    /// Windows naming: version resources, service hosts, MSIX packages,
+    /// browsers by executable name, GUI or console.
+    #[test]
+    fn windows_apps() {
+        let r = Resolver::new(false);
+        let app = |p: &Process| r.app_of(Some(p), None, "self".into());
+        let os = Some("Microsoft® Windows® Operating System");
+        let a = app(&process(exe(r"C:\Windows\System32\svchost.exe", os, "10.0.26100.1", false), &["wuauserv"]));
+        assert_eq!((a.name.as_str(), a.kind.as_str(), a.version.as_deref()), ("wuauserv", "system", Some("10.0.26100.1")));
+        // Too many services in one host to tell which one: the host itself.
+        let many = ["a", "b", "c", "d"];
+        assert_eq!(app(&process(exe(r"C:\Windows\System32\svchost.exe", os, "10.0.26100.1", false), &many)).name, "svchost");
+        let a = app(&process(exe(r"C:\Program Files\Google\Chrome\Application\chrome.exe", Some("Google Chrome"), "131.0.6778.86", true), &[]));
+        assert_eq!((a.name.as_str(), a.kind.as_str(), a.browser.as_deref()), ("Google Chrome", "browser", Some("chrome")));
+        let teams = r"C:\Program Files\WindowsApps\MSTeams_25290.205.4069.4894_x64__8wekyb3d8bbwe\ms-teams.exe";
+        let a = app(&process(exe(teams, Some("Microsoft Teams"), "1.0.0", true), &[]));
+        assert_eq!(
+            (a.name.as_str(), a.id.as_deref(), a.version.as_deref(), a.kind.as_str()),
+            ("Microsoft Teams", Some("MSTeams_8wekyb3d8bbwe"), Some("25290.205.4069.4894"), "app")
+        );
+        let a = app(&process(exe(r"C:\Program Files\Python313\python.exe", Some("Python"), "3.13.1", false), &[]));
+        assert_eq!((a.name.as_str(), a.kind.as_str()), ("Python", "cli"));
+        let a = app(&process(exe(r"C:\tools\tool.exe", None, "", false), &[]));
+        assert_eq!((a.name.as_str(), a.version, a.kind.as_str()), ("tool", None, "cli"));
+        // A Chromium browser missing from apps.toml is still a browser; the
+        // WebView2 runtime is not.
+        let with_engine = |path: &str| {
+            let mut e = (*exe(path, Some("Some Browser"), "131.1.2.3", true)).clone();
+            e.engine = Some(bundle::Engine { name: "chromium".into(), version: Some("131.1.2.3".into()), via: "chrome.dll".into() });
+            Arc::new(e)
+        };
+        let a = app(&process(with_engine(r"C:\Program Files\Some\Application\somebrowser.exe"), &[]));
+        assert_eq!((a.kind.as_str(), a.browser.as_deref()), ("browser", Some("chromium")));
+        let a = app(&process(with_engine(r"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\131.1.2.3\msedgewebview2.exe"), &[]));
+        assert_eq!(a.kind, "app");
     }
 
     #[test]

@@ -7,10 +7,13 @@ process belongs to. It also records the names each process contacts. The
 result ties fingerprints seen at the campus TAP to applications and versions.
 
 macOS is complete. Linux has fingerprints and per-ClientHello process lookup
-(procfs). Windows has fingerprints only so far (see [Other systems](#other-systems)).
+(procfs). Windows has fingerprints, per-ClientHello process lookup (the TCP
+and UDP tables) and Windows-specific app naming (see [Windows](#windows)).
 
-It needs libpcap. The PeerSig app (`../app`) installs it, reads its logs and
-sends what the participant agrees to; the probe itself never uses the network.
+It needs libpcap on macOS and Linux; on Windows it uses the packet capture
+built into the system, so nothing else is installed. The PeerSig app
+(`../app`) installs it, reads its logs and sends what the participant
+agrees to; the probe itself never uses the network.
 
 ## Build and run (macOS)
 
@@ -61,7 +64,7 @@ One JSON object per line, with these `type`s:
 | type | when | content |
 | --- | --- | --- |
 | `start` | first line | tool and app-table versions, random session id, OS version and build, Mac model, device, kernel filter |
-| `process` | first time a process is seen | pid, start time, executable, bundle chain (id, name, version of each `.app`/`.framework`/`.xpc`), code signature (identifier, team id, Apple platform binary), embedded Info.plist, engine, Go version, Homebrew/Nix package, Chromium helper type, interpreter script name, TLS libraries mapped and linked, responsible pid |
+| `process` | first time a process is seen | pid, start time, executable, bundle chain (id, name, version of each `.app`/`.framework`/`.xpc`), code signature (identifier, team id, Apple platform binary), embedded Info.plist, engine, Go version, Homebrew/Nix package, Chromium helper type, interpreter script name, TLS libraries mapped and linked, responsible pid; on Windows also the version resource, subsystem (gui, console), MSIX/Scoop package and the services a svchost runs |
 | `hello` | each ClientHello | time, transport (tcp, quic, dtls), QUIC version, addresses, interface, service class, SNI, ALPN, ECH, `ja4`, `ja4_r`, `ja4_o`, `ja4_ro`, `ja4_legacy`, `ja3`, `ja3_r`, the socket's process (`proc`, `helper`, `stacks`), effective (`eproc`) and responsible (`resp`) processes, and `app` |
 | `domain` | every 5 minutes (`--flush-every`) and at exit, for each (process, name) that changed | credited process and app, name, `via` (sni, dns, dns-query, http), cumulative count, first and last time, ports, JA4s |
 | `stats` | every 5 minutes and at exit | packets, ClientHellos per transport, failures, libpcap drops |
@@ -200,7 +203,7 @@ per (pid, start time).
   per JA4 without names; `summary --names` adds them.
 - The log keeps: full server names unless `--no-names`, destination
   addresses, local addresses, and executable paths. Paths under
-  `/Users/<name>` contain the account name.
+  `/Users/<name>` (`C:\Users\<name>` on Windows) contain the account name.
 - Command lines are never stored; only Chromium's helper type and an
   interpreter's script file name are.
 - No hostname is stored, only a random session id.
@@ -216,11 +219,77 @@ The capture, flow and fingerprint code is portable. What is per-OS
   x86_64-unknown-linux-gnu`) but has not been run. Next steps: an eBPF probe
   on `tcp_connect`/`udp_sendmsg` for the per-packet process, and package
   versions from dpkg/rpm, Flatpak and Snap.
-- **Windows**: not done. Plan: Npcap for capture,
-  `GetExtendedTcpTable`/`GetExtendedUdpTable` for the owner pid,
-  `QueryFullProcessImageNameW` and version resources for name and version,
-  and the service behind each `svchost` pid (BITS, wuauserv, DoSvc for
-  Delivery Optimization). ETW would give the per-packet process.
+- **Windows**: see below.
+
+### Windows
+
+```powershell
+cargo build --release -p peersig-probe
+.\target\release\peersig-probe.exe run            # an administrator terminal
+.\target\release\peersig-probe.exe whois 1234
+```
+
+- **Capture** (`src/capture/etw.rs`). The packet capture built into
+  Windows: the NDIS capture filter (ndiscap.sys, what `netsh trace` and
+  `pktmon` use) is bound to every adapter of Windows 10 and 11, and logs
+  packets through ETW (Microsoft-Windows-NDIS-PacketCapture) to the trace
+  sessions that enable it. The probe runs one real-time session with only
+  the send path enabled, so received traffic (downloads) stays in the
+  kernel, as with the outbound filter on macOS. Ethernet and Wi-Fi frames
+  come as Ethernet, mobile broadband and tunnels as raw IP. Packets from
+  adapters without an IP address are left out (a card under a Hyper-V
+  switch repeats its virtual adapter's packets). Loopback traffic is not
+  seen. There is no BPF; `-i <interface index>` keeps one adapter. Starting
+  the session needs an administrator, or LocalSystem for the service;
+  buffers are flushed every 100 ms so that a ClientHello arrives while its
+  connection is still open. `--save-pcap` writes pcapng, and `read` reads
+  pcap and pcapng without libpcap (`src/capture/file.rs`).
+- **Process of a ClientHello.** No per-packet process: the socket's owner
+  is looked up once per ClientHello in the TCP table (both endpoints) or
+  the UDP table (the source port, on that address or on all of them), as
+  `netstat -ano` does. `attribution` is `socket-table`. A connection that
+  closes before its ClientHello is handled can be missed.
+- **Process to app.** `QueryFullProcessImageNameW`, start time and parent
+  (`NtQueryInformationProcess`), command line (only Chromium's `--type`
+  and an interpreter's script are kept), loaded modules (ToolHelp). The
+  executable's version resource is read from the file itself, so its
+  product name is the same whatever the display language: it names the
+  app, with its product version. An MSIX (Store) app is named by its
+  package manifest and versioned by its package; its family name
+  (`MSTeams_8wekyb3d8bbwe`) is its `id`. A svchost process is named by the
+  service it runs (`wuauserv`, `BITS`, `DoSvc`), from the service manager.
+  `kind` is `system` under `%SystemRoot%` and for Windows components,
+  `app` for a GUI executable, `cli` for a console one. Browsers are matched
+  by executable name (`data/apps.toml`); an executable installed the way
+  Chromium browsers are (a version directory with `chrome.dll` or
+  `msedge.dll`) is a browser even when it is not listed, so that its names
+  are never collected.
+- **Who it works for.** A WebView2 process (`msedgewebview2.exe`) works for
+  the app that started it, through the parent chain: Teams, Outlook,
+  WhatsApp. A Chromium or Electron child works for its browser process
+  (same executable). The engine is that of the process that wrote the
+  ClientHello: Chromium from the version directory beside `chrome.dll` or
+  `msedge.dll`, CEF from `libcef.dll`, Gecko from `xul.dll`, Electron from
+  `resources\app.asar` (with a version only when a `version` file shipped).
+- **Service.** `peersig-probe service --dir <logs> --owner <SID>` is what
+  the PeerSig app installs as the `PeerSigProbe` service (LocalSystem,
+  automatic, restarted on failure). It waits until it can capture and says
+  why in `status.json` (`error`) meanwhile. The
+  log directory gets its own ACL (SYSTEM, Administrators, and the
+  participant: read, and add the `paused` file), and files are opened
+  without following links or hard links. Warnings go to `probe.log` next
+  to it.
+- Checked with `whois` on Windows 11, not elevated: Firefox is a browser (gecko,
+  NSS); WhatsApp's WebView2 processes are WhatsApp 2.2642.101.0 (chromium
+  157, from its WebView2 runtime); Claude and VS Code's helpers are
+  credited to their Electron apps; svchost processes carry their service.
+  A 30 s live capture on Windows 11 saw 1905 sent packets and 20
+  ClientHellos (TCP and QUIC: Spotify, Firefox, VS Code, OneDrive,
+  PowerShell...); 17 were attributed, the others came from processes that
+  had already exited (curl). Its pcapng gives the same 20 with `read`.
+- Not done: the code-signing publisher (Authenticode) as `team_id`; the
+  per-packet process (the ETW kernel network events), which would also
+  give DNS and HTTP names (they need per-packet metadata, as on Linux).
 
 `data/apps.toml` (browser bundle ids and executable names, stack libraries,
 resolver processes) is compiled in; bump its `version` on every change.

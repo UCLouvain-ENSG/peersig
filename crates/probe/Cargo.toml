@@ -12,7 +12,6 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 ctrlc = { version = "3", features = ["termination"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-pcap = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 toml = "0.8"
@@ -22,8 +21,38 @@ md5 = "0.7"
 hkdf = "0.12"
 aes = "0.8"
 aes-gcm = "0.10"
-# Executable inspection (Mach-O now; ELF and PE for Linux and Windows later)
+# Executable inspection: Mach-O, ELF, PE
 goblin = "0.9"
 memmap2 = "0.9"
 plist = "1"
+
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Windows captures with the system's own packet capture (ETW), so that
+# nothing else needs installing: no libpcap there.
+[target.'cfg(not(windows))'.dependencies]
+pcap = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Wdk_System_SystemServices",
+    "Wdk_System_Threading",
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Etw",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_System_Services",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+] }

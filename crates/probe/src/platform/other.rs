@@ -1,8 +1,5 @@
-//! Windows and others: not implemented yet. Fingerprints still work; records
-//! carry no process. Windows plan: GetExtendedTcpTable/GetExtendedUdpTable
-//! (owner PID), QueryFullProcessImageNameW, version resources
-//! (GetFileVersionInfoW), and the service name of svchost PIDs (BITS,
-//! wuauserv, DoSvc for Delivery Optimization).
+//! Other systems (the BSDs...): not implemented. Fingerprints still work;
+//! records carry no process.
 
 use super::{OsInfo, PidBasic};
 use crate::net::FlowKey;

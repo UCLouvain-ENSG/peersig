@@ -3748,6 +3748,7 @@ version = "0.1.2"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.23.1",
  "chrono",
  "peersig-proto",
  "peersig-server",
@@ -3782,6 +3783,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "toml 0.8.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

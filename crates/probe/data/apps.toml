@@ -3,18 +3,21 @@
 # [[browser]]: `bundle_id` matches the app's bundle id exactly or as a prefix
 # followed by a dot (com.google.Chrome covers com.google.Chrome.canary).
 # `family` names the browser; the engine is detected from the bundle
-# (frameworks, XUL, WebKit) and is not listed here. Windows and Linux will
-# match `exe` (file name, case-insensitive) instead.
+# (frameworks, XUL, WebKit) and is not listed here. Windows and Linux
+# match `exe` (file name, case-insensitive) instead. A browser that is not
+# recognised has the names it contacts collected like any app's: keep this
+# list complete for every OS PeerSig runs on.
 #
 # [[stack]]: libraries that say which TLS stack or runtime a process uses.
-# `match` is a substring of a linked or mapped library path.
+# `match` is a substring of a linked or mapped library path (on Windows,
+# case-insensitive).
 #
 # `resolvers`: processes that send DNS queries for others. Their queries
 # are not credited to them (the answers name the connections that follow).
 #
 # Bump `version` on every change.
 
-version = "2026-11-16.1"
+version = "2026-11-17.1"
 
 resolvers = ["mDNSResponder", "systemd-resolved", "systemd-resolve", "dnsmasq", "unbound", "named", "dnscache", "svchost.exe"]
 
@@ -55,6 +58,7 @@ exe = ["vivaldi.exe", "vivaldi-bin"]
 [[browser]]
 bundle_id = "company.thebrowser.Browser"
 family = "arc"
+exe = ["arc.exe"]
 
 [[browser]]
 bundle_id = "company.thebrowser.dia"
@@ -63,6 +67,7 @@ family = "dia"
 [[browser]]
 bundle_id = "ai.perplexity.comet"
 family = "comet"
+exe = ["comet.exe"]
 
 [[browser]]
 bundle_id = "com.openai.atlas"
@@ -94,6 +99,7 @@ exe = ["zen.exe", "zen"]
 [[browser]]
 bundle_id = "net.waterfox.waterfox"
 family = "waterfox"
+exe = ["waterfox.exe"]
 
 [[browser]]
 bundle_id = "org.torproject.torbrowser"
@@ -110,6 +116,8 @@ family = "safari"
 [[browser]]
 bundle_id = "com.duckduckgo.macos.browser"
 family = "duckduckgo"
+# Windows: a WebView2 app; its network process is credited to it.
+exe = ["duckduckgo.exe"]
 
 [[browser]]
 bundle_id = "com.kagi.kagimacOS"
@@ -190,6 +198,53 @@ stack = "mono"
 
 [[stack]]
 match = "QtNetwork"
+stack = "qt"
+
+# Windows: SChannel is loaded by whatever uses the system TLS stack
+# (WinHTTP, WinINet, .NET Framework, most native apps).
+
+[[stack]]
+match = "schannel.dll"
+stack = "schannel"
+
+[[stack]]
+match = "winhttp.dll"
+stack = "winhttp"
+
+[[stack]]
+match = "wininet.dll"
+stack = "wininet"
+
+[[stack]]
+match = "nss3.dll"
+stack = "nss"
+
+[[stack]]
+match = "xul.dll"
+stack = "nss"
+
+[[stack]]
+match = "coreclr.dll"
+stack = "dotnet"
+
+[[stack]]
+match = "\\clr.dll"
+stack = "dotnet-framework"
+
+[[stack]]
+match = "jvm.dll"
+stack = "java"
+
+[[stack]]
+match = "python3"
+stack = "python"
+
+[[stack]]
+match = "Qt5Network.dll"
+stack = "qt"
+
+[[stack]]
+match = "Qt6Network.dll"
 stack = "qt"
 
 [[stack]]

@@ -192,17 +192,46 @@ impl Bundles {
     }
 }
 
-/// Package manager installs, from the path: Homebrew Cellar/Caskroom, Nix.
+/// Package manager installs, from the path: Homebrew Cellar/Caskroom, Nix;
+/// on Windows, MSIX/Store packages (`WindowsApps\<full name>`) and Scoop.
 #[derive(Debug, Clone, Serialize)]
 pub struct Package {
     pub manager: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// MSIX package family name (`MSTeams_8wekyb3d8bbwe`): the app's
+    /// identity whatever its version, like a bundle id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// MSIX: the name in the package manifest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// The `<DisplayName>` of an MSIX package's manifest (`WindowsApps\<full
+/// name>\AppxManifest.xml`), unless it points to a translated resource.
+pub fn msix_display_name(exe_path: &str) -> Option<String> {
+    const DIR: &str = "\\windowsapps\\";
+    let i = exe_path.to_ascii_lowercase().find(DIR)? + DIR.len();
+    let pkg = exe_path[i..].split('\\').next()?;
+    let manifest = Path::new(&exe_path[..i]).join(pkg).join("AppxManifest.xml");
+    let xml = std::fs::read_to_string(manifest).ok()?;
+    let props = &xml[xml.find("<Properties>")?..];
+    let s = props.find("<DisplayName>")? + "<DisplayName>".len();
+    let e = s + props[s..].find("</DisplayName>")?;
+    let name = props[s..e]
+        .trim()
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'");
+    (!name.is_empty() && !name.starts_with("ms-resource:") && name.chars().count() <= 128).then_some(name)
 }
 
 pub fn package_of(path: &str) -> Option<Package> {
-    let parts: Vec<&str> = path.split('/').collect();
+    let parts: Vec<&str> = path.split(['/', '\\']).collect();
     for (i, p) in parts.iter().enumerate() {
         if *p == "Cellar" || *p == "Caskroom" {
             let name = parts.get(i + 1)?;
@@ -210,13 +239,117 @@ pub fn package_of(path: &str) -> Option<Package> {
                 manager: if *p == "Cellar" { "homebrew" } else { "homebrew-cask" }.into(),
                 name: name.to_string(),
                 version: parts.get(i + 2).map(|s| s.to_string()),
+                family: None,
+                display_name: None,
             });
         }
         if *p == "store" && i > 0 && parts[i - 1] == "nix" {
             let entry = parts.get(i + 1)?;
             let nv = entry.get(33..).unwrap_or(entry);
-            return Some(Package { manager: "nix".into(), name: nv.to_string(), version: None });
+            return Some(Package { manager: "nix".into(), name: nv.to_string(), version: None, family: None, display_name: None });
         }
+        // Name_Version_Architecture_ResourceId_PublisherId
+        if p.eq_ignore_ascii_case("WindowsApps") {
+            let f: Vec<&str> = parts.get(i + 1)?.split('_').collect();
+            if f.len() == 5 && !f[0].is_empty() && f[1].chars().all(|c| c.is_ascii_digit() || c == '.') {
+                return Some(Package {
+                    manager: "msix".into(),
+                    name: f[0].to_string(),
+                    version: Some(f[1].to_string()),
+                    family: Some(format!("{}_{}", f[0], f[4])),
+                    display_name: None,
+                });
+            }
+        }
+        if p.eq_ignore_ascii_case("scoop") && parts.get(i + 1).is_some_and(|a| a.eq_ignore_ascii_case("apps")) {
+            let name = parts.get(i + 2)?;
+            let version = parts.get(i + 3).filter(|v| !v.eq_ignore_ascii_case("current")).map(|v| v.to_string());
+            return Some(Package { manager: "scoop".into(), name: name.to_string(), version, family: None, display_name: None });
+        }
+    }
+    None
+}
+
+/// Directory names Chromium browsers install their version in
+/// (`Application\131.0.6778.86\chrome.dll`).
+fn is_version_dir(name: &str) -> bool {
+    let p: Vec<&str> = name.split('.').collect();
+    p.len() >= 3 && p.iter().all(|x| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn version_key(v: &str) -> Vec<u64> {
+    v.split('.').map(|x| x.parse().unwrap_or(0)).collect()
+}
+
+/// The library a Chromium build keeps next to its version directory.
+const CHROMIUM_DLLS: &[&str] = &["chrome.dll", "msedge.dll", "vivaldi.dll", "opera_browser.dll"];
+
+/// The web engine of a Windows executable, from the files installed with
+/// it (nothing is run):
+/// - Chromium browsers and Edge WebView2: a version directory holding the
+///   browser DLL, beside the executable or around it (`chromium <v>`; for
+///   a browser that numbers its own versions, like Brave, `<v>` is that
+///   number, as on macOS);
+/// - CEF: libcef.dll, versioned by its resource;
+/// - Electron: an `app.asar` (or `app` folder) in `resources`, with
+///   Chromium's paks; the version from a `version` file when it shipped;
+/// - Gecko: xul.dll, versioned by `platform.ini`'s Milestone.
+///
+/// `exe_version` is the executable's own product version: during an update
+/// two version directories exist, and the running one has that number.
+pub fn windows_engine(exe: &Path, exe_version: Option<&str>) -> Option<Engine> {
+    let dir = exe.parent()?;
+    let has = |d: &Path, f: &str| d.join(f).is_file();
+    // The executable runs from the version directory (msedgewebview2.exe).
+    if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
+        if is_version_dir(name) {
+            if let Some(dll) = CHROMIUM_DLLS.iter().find(|d| has(dir, d)) {
+                return Some(Engine { name: "chromium".into(), version: Some(name.to_string()), via: dll.to_string() });
+            }
+        }
+    }
+    // The version directory is beside the executable (chrome.exe).
+    let mut versions: Vec<(String, &str)> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    if !is_version_dir(&n) {
+                        return None;
+                    }
+                    let dll = CHROMIUM_DLLS.iter().find(|d| has(&e.path(), d))?;
+                    Some((n, *dll))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    versions.sort_by_key(|(v, _)| version_key(v));
+    let running = exe_version.and_then(|ev| versions.iter().find(|(v, _)| v == ev));
+    if let Some((v, dll)) = running.or(versions.last()) {
+        return Some(Engine { name: "chromium".into(), version: Some(v.clone()), via: dll.to_string() });
+    }
+    if has(dir, "libcef.dll") {
+        let v = crate::binary::pe_version(&dir.join("libcef.dll"));
+        let version = v.as_ref().and_then(|v| v.product_version.clone().or_else(|| v.file_version.clone()));
+        return Some(Engine { name: "cef".into(), version, via: "libcef.dll".into() });
+    }
+    if has(dir, "xul.dll") {
+        let ini = |f: &str, k: &str| {
+            std::fs::read_to_string(dir.join(f))
+                .ok()
+                .and_then(|s| s.lines().find_map(|l| l.strip_prefix(k).map(|v| v.trim().to_string())))
+        };
+        let version = ini("platform.ini", "Milestone=").or_else(|| ini("application.ini", "Version="));
+        return Some(Engine { name: "gecko".into(), version, via: "xul.dll".into() });
+    }
+    let res = dir.join("resources");
+    let paks = has(dir, "chrome_100_percent.pak") || has(dir, "resources.pak") || has(dir, "v8_context_snapshot.bin");
+    if paks && (res.join("app.asar").is_file() || res.join("app").is_dir() || res.join("default_app.asar").is_file()) {
+        let version = std::fs::read_to_string(dir.join("version"))
+            .ok()
+            .map(|s| s.trim().trim_start_matches('v').to_string())
+            .filter(|s| !s.is_empty() && s.len() < 32);
+        return Some(Engine { name: "electron".into(), version, via: "resources\\app.asar".into() });
     }
     None
 }
@@ -232,5 +365,46 @@ mod tests {
         let p = package_of("/nix/store/0123456789abcdefghijklmnopqrstuv-curl-8.4.0/bin/curl").unwrap();
         assert_eq!(p.name, "curl-8.4.0");
         assert!(package_of("/usr/bin/curl").is_none());
+        let p = package_of(r"C:\Program Files\WindowsApps\MSTeams_25290.205.4069.4894_x64__8wekyb3d8bbwe\ms-teams.exe").unwrap();
+        assert_eq!(
+            (p.manager.as_str(), p.name.as_str(), p.version.as_deref(), p.family.as_deref()),
+            ("msix", "MSTeams", Some("25290.205.4069.4894"), Some("MSTeams_8wekyb3d8bbwe"))
+        );
+        let p = package_of(r"C:\Users\x\scoop\apps\curl\8.11.0_1\bin\curl.exe").unwrap();
+        assert_eq!((p.manager.as_str(), p.name.as_str(), p.version.as_deref()), ("scoop", "curl", Some("8.11.0_1")));
+        assert!(package_of(r"C:\Program Files\Google\Chrome\Application\chrome.exe").is_none());
+    }
+
+    /// Install layouts, made in a temporary directory.
+    #[test]
+    fn windows_engines() {
+        let root = std::env::temp_dir().join(format!("peersig-engines-{}", std::process::id()));
+        let mk = |rel: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"").unwrap();
+            p
+        };
+        let chrome = mk("Chrome/Application/chrome.exe");
+        mk("Chrome/Application/130.0.6723.117/chrome.dll");
+        mk("Chrome/Application/131.0.6778.86/chrome.dll");
+        let e = windows_engine(&chrome, None).unwrap();
+        assert_eq!((e.name.as_str(), e.version.as_deref()), ("chromium", Some("131.0.6778.86")));
+        // The running version, when the update has not been applied yet.
+        assert_eq!(windows_engine(&chrome, Some("130.0.6723.117")).unwrap().version.as_deref(), Some("130.0.6723.117"));
+        let wv = mk("EdgeWebView/Application/131.0.2903.70/msedgewebview2.exe");
+        mk("EdgeWebView/Application/131.0.2903.70/msedge.dll");
+        assert_eq!(windows_engine(&wv, None).unwrap().label(), "chromium 131.0.2903.70");
+        let ff = mk("Firefox/firefox.exe");
+        mk("Firefox/xul.dll");
+        std::fs::write(root.join("Firefox/platform.ini"), "[Build]\nMilestone=133.0\n").unwrap();
+        assert_eq!(windows_engine(&ff, None).unwrap().label(), "gecko 133.0");
+        let code = mk("Code/Code.exe");
+        mk("Code/chrome_100_percent.pak");
+        mk("Code/resources/app.asar");
+        assert_eq!(windows_engine(&code, None).unwrap().label(), "electron");
+        let plain = mk("Tool/tool.exe");
+        assert!(windows_engine(&plain, None).is_none());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

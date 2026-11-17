@@ -5,6 +5,7 @@
 mod attrib;
 mod binary;
 mod bundle;
+mod capture;
 mod dns;
 mod domains;
 mod fingerprint;
@@ -14,6 +15,8 @@ mod net;
 mod pipeline;
 mod platform;
 mod quic;
+#[cfg(windows)]
+mod service;
 mod summary;
 mod tls;
 
@@ -25,7 +28,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde_json::json;
 
 use attrib::Resolver;
@@ -38,53 +41,66 @@ struct Cli {
     cmd: Cmd,
 }
 
+#[derive(Args, Clone)]
+struct RunOpts {
+    /// Capture device. macOS default: the PKTAP pseudo-interface on all
+    /// interfaces, which tags every packet with its process. Windows:
+    /// `all` (default), or an interface index.
+    #[arg(short, long)]
+    interface: Option<String>,
+    /// Output file (JSON lines). Default: peersig-probe-<date>-<time>.jsonl
+    #[arg(short, long)]
+    output: Option<String>,
+    /// Daemon mode: daily files peersig-<date>.jsonl in this directory,
+    /// a status.json heartbeat, and a `paused` file to stop capturing.
+    #[arg(long)]
+    dir: Option<String>,
+    /// With --dir: user owning the files (default: who ran sudo). On
+    /// Windows, the account's SID, given read access to the directory.
+    #[arg(long)]
+    owner: Option<String>,
+    /// With --dir: delete daily files older than this.
+    #[arg(long, default_value_t = 14)]
+    keep_days: u32,
+    /// Do not record server names (SNI, DNS, HTTP Host) nor the
+    /// per-process name tables.
+    #[arg(long)]
+    no_names: bool,
+    /// Kernel filter; "" for none. Default: outbound packets and DNS
+    /// answers on PKTAP, none otherwise. Windows captures sent packets
+    /// only, without BPF.
+    #[arg(long)]
+    bpf: Option<String>,
+    #[arg(long, default_value_t = 16384)]
+    snaplen: i32,
+    /// Also save the captured packets (pcap, PKTAP link type on macOS;
+    /// pcapng on Windows).
+    #[arg(long)]
+    save_pcap: Option<String>,
+    /// Print every ClientHello (default: each new JA4/application pair).
+    #[arg(short, long)]
+    verbose: bool,
+    /// Nothing on the terminal.
+    #[arg(short, long)]
+    quiet: bool,
+    /// Seconds between the per-process name tables and stats records.
+    #[arg(long, default_value_t = 300)]
+    flush_every: u64,
+    /// Stop after this many seconds.
+    #[arg(long)]
+    duration: Option<u64>,
+}
+
 #[derive(Subcommand)]
 enum Cmd {
-    /// Capture live (needs root: sudo peersig-probe run)
-    Run {
-        /// Capture device. macOS default: the PKTAP pseudo-interface on all
-        /// interfaces, which tags every packet with its process.
-        #[arg(short, long)]
-        interface: Option<String>,
-        /// Output file (JSON lines). Default: peersig-probe-<date>-<time>.jsonl
-        #[arg(short, long)]
-        output: Option<String>,
-        /// Daemon mode: daily files peersig-<date>.jsonl in this directory,
-        /// a status.json heartbeat, and a `paused` file to stop capturing.
-        #[arg(long)]
-        dir: Option<String>,
-        /// With --dir: user owning the files (default: who ran sudo).
-        #[arg(long)]
-        owner: Option<String>,
-        /// With --dir: delete daily files older than this.
-        #[arg(long, default_value_t = 14)]
-        keep_days: u32,
-        /// Do not record server names (SNI, DNS, HTTP Host) nor the
-        /// per-process name tables.
-        #[arg(long)]
-        no_names: bool,
-        /// Kernel filter; "" for none. Default: outbound packets and DNS
-        /// answers on PKTAP, none otherwise.
-        #[arg(long)]
-        bpf: Option<String>,
-        #[arg(long, default_value_t = 16384)]
-        snaplen: i32,
-        /// Also save the captured packets (pcap, PKTAP link type on macOS).
-        #[arg(long)]
-        save_pcap: Option<String>,
-        /// Print every ClientHello (default: each new JA4/application pair).
-        #[arg(short, long)]
-        verbose: bool,
-        /// Nothing on the terminal.
-        #[arg(short, long)]
-        quiet: bool,
-        /// Seconds between the per-process name tables and stats records.
-        #[arg(long, default_value_t = 300)]
-        flush_every: u64,
-        /// Stop after this many seconds.
-        #[arg(long)]
-        duration: Option<u64>,
-    },
+    /// Capture live (needs root: sudo peersig-probe run; an administrator
+    /// terminal on Windows)
+    Run(RunOpts),
+    /// Windows service entry point, used by the service the PeerSig app
+    /// installs: `run`, under the service manager.
+    #[cfg(windows)]
+    #[command(hide = true)]
+    Service(RunOpts),
     /// Read a capture file (no process lookups; PKTAP files keep the
     /// process names)
     Read {
@@ -115,25 +131,42 @@ enum Cmd {
     Whois { pids: Vec<i32> },
 }
 
+impl RunOpts {
+    fn into_args(self) -> RunArgs {
+        RunArgs {
+            interface: self.interface,
+            output: self.output,
+            dir: self.dir,
+            owner: self.owner,
+            keep_days: self.keep_days,
+            names: !self.no_names,
+            bpf: self.bpf,
+            snaplen: self.snaplen,
+            save_pcap: self.save_pcap,
+            opts: Options { names: !self.no_names, verbose: self.verbose, console: !self.quiet },
+            flush_every: self.flush_every,
+            duration: self.duration,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Run { interface, output, dir, owner, keep_days, no_names, bpf, snaplen, save_pcap, verbose, quiet, flush_every, duration } => {
-            run(RunArgs {
-                interface,
-                output,
-                dir,
-                owner,
-                keep_days,
-                names: !no_names,
-                bpf,
-                snaplen,
-                save_pcap,
-                opts: Options { names: !no_names, verbose, console: !quiet },
-                flush_every,
-                duration,
-            })
+        Cmd::Run(o) => {
+            let stop = Arc::new(AtomicBool::new(false));
+            {
+                let stop = stop.clone();
+                ctrlc::set_handler(move || {
+                    if stop.swap(true, Ordering::SeqCst) {
+                        std::process::exit(130);
+                    }
+                })?;
+            }
+            run(o.into_args(), stop)
         }
+        #[cfg(windows)]
+        Cmd::Service(o) => service::start(o.into_args()),
         Cmd::Read { file, output, no_names, verbose } => read(&file, output, Options { names: !no_names, verbose, console: true }),
         Cmd::Summary { files, names, format, key } => summary::run(&files, &summary::Opts { names, format, key }),
         Cmd::Whois { pids } => whois(&pids),
@@ -142,8 +175,18 @@ fn main() -> Result<()> {
 
 fn session_id() -> String {
     let mut b = [0u8; 8];
-    if let Ok(mut f) = File::open("/dev/urandom") {
-        let _ = std::io::Read::read_exact(&mut f, &mut b);
+    match File::open("/dev/urandom") {
+        Ok(mut f) => {
+            let _ = std::io::Read::read_exact(&mut f, &mut b);
+        }
+        Err(_) => {
+            // Windows: std seeds its hash keys from the system's random
+            // generator.
+            use std::hash::{BuildHasher, Hasher};
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+            b = h.finish().to_le_bytes();
+        }
     }
     b.iter().map(|x| format!("{:02x}", x)).collect()
 }
@@ -164,7 +207,7 @@ fn create_output(path: &str) -> Result<Box<dyn Write + Send>> {
 fn start_record(device: &str, dlt: i32, filter: &str, live: bool, names: bool, db: &str) -> serde_json::Value {
     json!({
         "type": "start",
-        "ts": pipeline::ts_string(chrono::Utc::now().timestamp_micros() as f64 / 1e6),
+        "ts": now_ts(),
         "tool": format!("peersig-probe {}", env!("CARGO_PKG_VERSION")),
         "apps_db": db,
         "session": session_id(),
@@ -179,33 +222,8 @@ fn start_record(device: &str, dlt: i32, filter: &str, live: bool, names: bool, d
     })
 }
 
-fn ts_of(h: &pcap::PacketHeader) -> f64 {
-    h.ts.tv_sec as f64 + h.ts.tv_usec as f64 / 1e6
-}
-
-/// Opens the capture device; returns it with its link type and the kernel
-/// filter actually in use.
-fn open_capture(device: &str, snaplen: i32, bpf: &Option<String>, names: bool) -> Result<(pcap::Capture<pcap::Active>, i32, String)> {
-    let inactive = pcap::Capture::from_device(device)?.snaplen(snaplen).buffer_size(16 << 20).promisc(false).timeout(100);
-    #[cfg(target_os = "macos")]
-    if device.starts_with("pktap") && !platform::want_pktap(inactive.as_ptr().cast()) {
-        eprintln!("warning: this libpcap has no pcap_set_want_pktap: no per-packet process metadata");
-    }
-    let mut cap = inactive.open().with_context(|| format!("opening {}", device))?;
-    let dlt = cap.get_datalink().0;
-    let filter = match bpf {
-        Some(f) => f.clone(),
-        None if net::is_pktap(dlt) => net::pktap_filter(names),
-        None => String::new(),
-    };
-    let mut used = filter.clone();
-    if !filter.is_empty() {
-        if let Err(e) = cap.filter(&filter, true) {
-            eprintln!("warning: kernel filter rejected ({}); filtering in user space only", e);
-            used = String::new();
-        }
-    }
-    Ok((cap, dlt, used))
+fn now_ts() -> String {
+    pipeline::ts_string(chrono::Utc::now().timestamp_micros() as f64 / 1e6)
 }
 
 pub struct RunArgs {
@@ -223,7 +241,8 @@ pub struct RunArgs {
     duration: Option<u64>,
 }
 
-fn run(a: RunArgs) -> Result<()> {
+/// Captures until `stop` is set (Ctrl-C, or the Windows service manager).
+fn run(a: RunArgs, stop: Arc<AtomicBool>) -> Result<()> {
     let RunArgs { interface, output, dir, owner, keep_days, names, bpf, snaplen, save_pcap, opts, flush_every, duration } = a;
     let device = interface.unwrap_or_else(|| platform::DEFAULT_DEVICE.to_string());
     if device.is_empty() {
@@ -236,15 +255,39 @@ fn run(a: RunArgs) -> Result<()> {
     if dir.is_some() && (output.is_some() || save_pcap.is_some()) {
         bail!("--dir writes daily files: it does not go with --output or --save-pcap");
     }
-    let (cap, dlt, filter_used) = open_capture(&device, snaplen, &bpf, names)?;
-    if !net::is_pktap(dlt) {
-        // Always shown: on macOS this means the attribution is much weaker.
-        eprintln!("warning: {} has no per-packet process metadata (link type {}); processes are looked up per ClientHello", device, dlt);
-    }
     let mut logdir = match &dir {
         Some(d) => Some(logdir::LogDir::new(std::path::Path::new(d), logdir::resolve_owner(owner.as_deref())?, keep_days)?),
         None => None,
     };
+    // A daemon waits until it can capture, and says why in its status file
+    // meanwhile.
+    let cap = loop {
+        match capture::Live::open(&device, snaplen, &bpf, names) {
+            Ok(c) => break c,
+            Err(e) => {
+                let Some(l) = logdir.as_ref() else { return Err(e) };
+                l.write_status(&json!({
+                    "tool": format!("peersig-probe {}", env!("CARGO_PKG_VERSION")),
+                    "pid": std::process::id(),
+                    "updated": now_ts(),
+                    "device": device,
+                    "paused": l.paused(),
+                    "error": format!("{:#}", e),
+                }));
+                for _ in 0..150 {
+                    if stop.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
+        }
+    };
+    let (dlt, filter_used) = (cap.dlt(), cap.filter().to_string());
+    if !cfg!(windows) && !net::is_pktap(dlt) {
+        // Always shown: on macOS this means the attribution is much weaker.
+        eprintln!("warning: {} has no per-packet process metadata (link type {}); processes are looked up per ClientHello", device, dlt);
+    }
     let (out, mut out_path) = match logdir.as_mut() {
         Some(l) => {
             l.prune();
@@ -266,27 +309,20 @@ fn run(a: RunArgs) -> Result<()> {
         eprintln!("peersig-probe: capturing on {} (link type {}), writing {}; Ctrl-C to stop", device, dlt, out_path);
     }
 
-    let stop = Arc::new(AtomicBool::new(false));
-    {
-        let stop = stop.clone();
-        ctrlc::set_handler(move || {
-            if stop.swap(true, Ordering::SeqCst) {
-                std::process::exit(130);
-            }
-        })?;
-    }
     let paused = Arc::new(AtomicBool::new(logdir.as_ref().is_some_and(|l| l.paused())));
-    let pcap_stats: Arc<Mutex<Option<pcap::Stat>>> = Arc::new(Mutex::new(None));
-    let (tx, rx) = sync_channel::<(f64, Vec<u8>)>(65_536);
+    let cap_stats: Arc<Mutex<Option<capture::Stats>>> = Arc::new(Mutex::new(None));
+    let (tx, rx) = sync_channel::<capture::Packet>(65_536);
     let cap_thread = {
         let stop = stop.clone();
         let paused = paused.clone();
-        let stats = pcap_stats.clone();
+        let stats = cap_stats.clone();
         let device = device.clone();
+        let bpf = bpf.clone();
         std::thread::Builder::new().name("capture".into()).spawn(move || -> Result<()> {
             let mut cap = Some(cap);
-            let mut save = match (&save_pcap, cap.as_mut()) {
-                (Some(path), Some(c)) => Some(c.savefile(path)?),
+            // Outlives a pause, which closes the device.
+            let mut save = match (&save_pcap, cap.as_ref()) {
+                (Some(path), Some(c)) => Some(c.saver(path, snaplen)?),
                 _ => None,
             };
             let mut last = Instant::now();
@@ -299,35 +335,28 @@ fn run(a: RunArgs) -> Result<()> {
                 }
                 let c = match cap.as_mut() {
                     Some(c) => c,
-                    None => match open_capture(&device, snaplen, &bpf, names) {
-                        Ok((c, _, _)) => cap.insert(c),
+                    None => match capture::Live::open(&device, snaplen, &bpf, names) {
+                        Ok(c) => cap.insert(c),
                         Err(e) => {
-                            eprintln!("reopening {}: {}", device, e);
+                            eprintln!("reopening {}: {:#}", device, e);
                             std::thread::sleep(Duration::from_secs(5));
                             continue;
                         }
                     },
                 };
-                match c.next_packet() {
-                    Ok(pkt) => {
-                        if let Some(s) = save.as_mut() {
-                            s.write(&pkt);
-                        }
-                        if tx.send((ts_of(pkt.header), pkt.data.to_vec())).is_err() {
-                            break;
-                        }
+                if let Some(pkt) = c.next(save.as_mut())? {
+                    if tx.send(pkt).is_err() {
+                        break;
                     }
-                    Err(pcap::Error::TimeoutExpired) => {}
-                    Err(e) => return Err(e.into()),
                 }
                 if last.elapsed() > Duration::from_secs(2) {
                     last = Instant::now();
-                    if let Ok(s) = c.stats() {
+                    if let Some(s) = c.stats() {
                         *stats.lock().unwrap() = Some(s);
                     }
                 }
             }
-            if let Some(Ok(s)) = cap.as_mut().map(|c| c.stats()) {
+            if let Some(s) = cap.as_mut().and_then(|c| c.stats()) {
                 *stats.lock().unwrap() = Some(s);
             }
             if let Some(s) = save.as_mut() {
@@ -338,12 +367,12 @@ fn run(a: RunArgs) -> Result<()> {
     };
 
     let started = Instant::now();
-    let started_ts = pipeline::ts_string(chrono::Utc::now().timestamp_micros() as f64 / 1e6);
+    let started_ts = now_ts();
     let mut warned = false;
     let mut last_flush = Instant::now();
     let mut last_report = Instant::now();
     let mut last_status = Instant::now() - Duration::from_secs(60);
-    let capture_stats = |s: &Arc<Mutex<Option<pcap::Stat>>>| {
+    let capture_stats = |s: &Arc<Mutex<Option<capture::Stats>>>| {
         let g = s.lock().unwrap();
         match &*g {
             Some(st) => json!({"received": st.received, "dropped": st.dropped, "if_dropped": st.if_dropped}),
@@ -352,7 +381,7 @@ fn run(a: RunArgs) -> Result<()> {
     };
     loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok((ts, data)) => p.packet(ts, dlt, &data),
+            Ok((ts, dlt, data)) => p.packet(ts, dlt, &data),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -373,7 +402,7 @@ fn run(a: RunArgs) -> Result<()> {
                 if l.needs_rotation() {
                     p.flush_domains();
                     let now = chrono::Utc::now().timestamp_micros() as f64 / 1e6;
-                    let rec = p.stats_record(now, capture_stats(&pcap_stats));
+                    let rec = p.stats_record(now, capture_stats(&cap_stats));
                     p.write(&rec);
                     let (w, path) = l.open_today()?;
                     p.set_output(w);
@@ -388,7 +417,7 @@ fn run(a: RunArgs) -> Result<()> {
                         "tool": format!("peersig-probe {}", env!("CARGO_PKG_VERSION")),
                         "pid": std::process::id(),
                         "started": started_ts,
-                        "updated": pipeline::ts_string(chrono::Utc::now().timestamp_micros() as f64 / 1e6),
+                        "updated": now_ts(),
                         "device": device,
                         "dlt": dlt,
                         "pktap": net::is_pktap(dlt),
@@ -408,7 +437,7 @@ fn run(a: RunArgs) -> Result<()> {
             if console {
                 eprintln!(
                     "warning: no packet in 15 s{}",
-                    if filter_used.is_empty() { "" } else { "; if the network is in use, retry with --bpf \"\" (no kernel filter)" }
+                    if cfg!(windows) || filter_used.is_empty() { "" } else { "; if the network is in use, retry with --bpf \"\" (no kernel filter)" }
                 );
             }
         }
@@ -416,7 +445,7 @@ fn run(a: RunArgs) -> Result<()> {
             last_report = Instant::now();
             p.flush_domains();
             let now = chrono::Utc::now().timestamp_micros() as f64 / 1e6;
-            let rec = p.stats_record(now, capture_stats(&pcap_stats));
+            let rec = p.stats_record(now, capture_stats(&cap_stats));
             p.write(&rec);
             if console {
                 let f = &p.tracker.stats;
@@ -429,21 +458,24 @@ fn run(a: RunArgs) -> Result<()> {
         if stop.load(Ordering::Relaxed) {
             // The capture thread stops within its 100 ms read timeout; keep
             // what it already queued.
-            while let Ok((ts, data)) = rx.recv_timeout(Duration::from_millis(300)) {
+            while let Ok((ts, dlt, data)) = rx.recv_timeout(Duration::from_millis(300)) {
                 p.packet(ts, dlt, &data);
             }
             break;
         }
     }
     drop(rx);
-    match cap_thread.join() {
-        Ok(Err(e)) => eprintln!("capture error: {}", e),
-        Err(_) => eprintln!("capture thread panicked"),
-        _ => {}
+    let failure = match cap_thread.join() {
+        Ok(Err(e)) => Some(format!("capture error: {:#}", e)),
+        Err(_) => Some("capture thread panicked".to_string()),
+        _ => None,
+    };
+    if let Some(f) = &failure {
+        eprintln!("{}", f);
     }
     p.flush_domains();
     let now = chrono::Utc::now().timestamp_micros() as f64 / 1e6;
-    let rec = p.stats_record(now, capture_stats(&pcap_stats));
+    let rec = p.stats_record(now, capture_stats(&cap_stats));
     p.write(&rec);
     p.flush();
     if let Some(l) = &logdir {
@@ -456,12 +488,17 @@ fn run(a: RunArgs) -> Result<()> {
             f.packets, f.tcp_hellos, f.quic_hellos, f.dtls_hellos, out_path
         );
     }
-    Ok(())
+    // A failed capture is an error exit, so that a service manager
+    // restarts the probe.
+    match failure {
+        Some(f) => bail!(f),
+        None => Ok(()),
+    }
 }
 
 fn read(file: &str, output: Option<String>, opts: Options) -> Result<()> {
-    let mut cap = pcap::Capture::from_file(file).with_context(|| file.to_string())?;
-    let dlt = cap.get_datalink().0;
+    let mut cap = capture::Offline::open(file).with_context(|| file.to_string())?;
+    let dlt = cap.dlt();
     let out: Box<dyn Write + Send> = match &output {
         Some(p) => create_output(p)?,
         None => Box::new(BufWriter::new(std::io::stdout())),
@@ -471,15 +508,9 @@ fn read(file: &str, output: Option<String>, opts: Options) -> Result<()> {
     let db = p.resolver.db.version.clone();
     p.write(&start_record(file, dlt, "", false, names, &db));
     let mut last_ts = 0.0;
-    loop {
-        match cap.next_packet() {
-            Ok(pkt) => {
-                last_ts = ts_of(pkt.header);
-                p.packet(last_ts, dlt, pkt.data);
-            }
-            Err(pcap::Error::NoMorePackets) => break,
-            Err(e) => return Err(e.into()),
-        }
+    while let Some((ts, dlt, data)) = cap.next()? {
+        last_ts = ts;
+        p.packet(ts, dlt, &data);
     }
     p.flush_domains();
     let rec = p.stats_record(last_ts, json!(null));
