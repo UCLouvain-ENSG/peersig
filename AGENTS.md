@@ -53,6 +53,13 @@ product: a change that weakens one is a bug even if every test passes.
   never collected: a browser missing there (by bundle id or, on Windows
   and Linux, executable name) has its names treated like any app's.
 
+## Branches
+
+Work on `main` only, on every machine: commit there and push it, without
+feature or release branches (release tags are cut from `main`). Pull
+before starting, since the Mac and the Windows PC both commit. Commits use
+tom.barbette@uclouvain.be.
+
 ## Logo
 
 `assets/logo/make_logo.py` draws it; `assets/logo/render.sh` regenerates the
