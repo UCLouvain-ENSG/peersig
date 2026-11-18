@@ -455,6 +455,17 @@ mod tests {
         assert_eq!(e.subsystem.as_deref(), Some("gui"));
     }
 
+    /// The Windows release ships the probe with nothing beside it: it may
+    /// only import DLLs that Windows has (see build.rs).
+    #[test]
+    #[cfg(all(windows, target_env = "msvc"))]
+    fn no_redistributable() {
+        let libs = inspect(&std::env::current_exe().unwrap()).unwrap().libs;
+        assert!(libs.iter().any(|l| l.eq_ignore_ascii_case("kernel32.dll")), "{:?}", libs);
+        let foreign = |l: &&String| ["vcruntime", "msvcp"].iter().any(|p| l.to_ascii_lowercase().starts_with(p));
+        assert_eq!(libs.iter().filter(foreign).count(), 0, "{:?}", libs);
+    }
+
     /// A version resource built by hand: root with VS_FIXEDFILEINFO,
     /// StringFileInfo, one table, two strings.
     #[test]

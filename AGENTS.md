@@ -42,10 +42,13 @@ product: a change that weakens one is a bug even if every test passes.
 - Windows: no libpcap. The probe captures through ETW (the system's NDIS
   packet capture, `src/capture/etw.rs`) and reads capture files itself
   (`src/capture/file.rs`), so the release needs nothing installed beside
-  it. Keep `pcap` out of the Windows build: pcap 2.5 depends on
-  windows-sys 0.36, whose import library maps `WaitOnAddress` to
-  vertdll.dll (the enclave DLL) and would crash std's first futex wait.
-  Live capture needs an administrator; it cannot run in CI.
+  it. Its `build.rs` links the Visual C++ runtime statically for the same
+  reason (no `VCRUNTIME140.dll`, which Windows does not have); a test
+  checks the probe's imports. Keep `pcap` out of the Windows build: pcap
+  2.5 depends on windows-sys 0.36, whose import library maps
+  `WaitOnAddress` to vertdll.dll (the enclave DLL) and would crash std's
+  first futex wait. Live capture needs an administrator; it cannot run in
+  CI.
 - `data/apps.toml`'s browser list decides which apps' server names are
   never collected: a browser missing there (by bundle id or, on Windows
   and Linux, executable name) has its names treated like any app's.
