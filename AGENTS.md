@@ -14,6 +14,11 @@ product: a change that weakens one is a bug even if every test passes.
   stores counters, not ballots. Keep tables `WITHOUT ROWID` and the journal
   out of WAL mode.
 - Every participant asks for `tokens_per_epoch` tokens, whatever it sends.
+- Dedicated observers (`OBS-` codes, docs/observers.md) are published
+  without threshold, so they stay apart from participants: no tokens for
+  observer codes, no observer reports from participants' codes, and
+  observer counts (`observed`) never mix with `counts`. Observer codes
+  are made only on the server, never by the web page.
 - Web enrollment (`crates/server/src/enroll.rs`) keeps a keyed hash of the
   e-mail address or GitHub id and a count, never the identity itself, and
   nothing that links it to the code. Its pages answer alike whether or not
@@ -37,8 +42,9 @@ product: a change that weakens one is a bug even if every test passes.
 
 ## Building and testing
 
-- `cargo test --locked` covers probe, proto, server and relay. The server and
-  relay tests run full enroll → issue → OHTTP ballot → release cycles.
+- `cargo test --locked` covers probe, proto, server, relay and observer. The
+  server and relay tests run full enroll → issue → OHTTP ballot → release
+  cycles; `crates/server/tests/observers.rs` the observers' daily reports.
 - The app (`-p peersig-app`) needs the probe binary in `crates/app/binaries/`
   (see the README there) and Tauri's system libraries; its test runs a
   weekly report against an in-process server.

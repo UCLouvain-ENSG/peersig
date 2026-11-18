@@ -10,6 +10,11 @@
 //!
 //! Nothing is sent while the app is not running, so the participant always
 //! knows. A week whose window passes without the app running is skipped.
+//!
+//! With an observer's code (`OBS-…`), the computer is a dedicated observer:
+//! it reports each day (UTC) during the next, in one request with its code
+//! (no tokens, no spreading), and the server publishes the day's items
+//! without threshold. The review works the same, 0 hours by default.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -22,8 +27,8 @@ use peersig_proto::item::{Observed, Skipped};
 use peersig_proto::merge;
 use peersig_proto::plan;
 use peersig_proto::token;
-use peersig_proto::wire::{Ballot, Config, IssueRequest};
-use peersig_proto::Item;
+use peersig_proto::wire::{Ballot, Config, IssueRequest, ObserverReceipt, ObserverReport};
+use peersig_proto::{code, EpochSpec, Item};
 
 use crate::local::{self, ProbeStatus};
 use crate::probe;
@@ -37,6 +42,15 @@ pub fn day(t: i64) -> String {
     chrono::DateTime::from_timestamp(t, 0)
         .map(|d| d.with_timezone(&chrono::Local).format("%a %-d %b").to_string())
         .unwrap_or_default()
+}
+
+/// Seconds after midnight UTC before an observer reports the day before.
+pub const OBSERVER_AFTER_MIDNIGHT: i64 = 15 * 60;
+
+/// The UTC day that starts at `t`, named in local time: noon UTC is the
+/// same date everywhere between UTC−12 and UTC+12.
+pub fn utc_day(t: i64) -> String {
+    day(t + 12 * 3600)
 }
 
 /// The study's collection server and relay, filled in on the join screen.
@@ -83,6 +97,31 @@ impl Settings {
     }
     pub fn client(&self) -> Result<Client> {
         Client::new(&self.server, Some(self.relay.as_str()).filter(|r| !r.is_empty()))
+    }
+    /// A dedicated observer: reports daily, published without threshold.
+    pub fn observer(&self) -> bool {
+        code::is_observer(&self.code)
+    }
+}
+
+/// The reporting periods: weeks for a participant, days for an observer.
+#[derive(Serialize, Clone, Copy, Debug)]
+pub struct Cycle {
+    pub spec: EpochSpec,
+    pub current: u32,
+    /// The period being reported; equal to `current` when there is none yet.
+    pub report: u32,
+    pub observer: bool,
+}
+
+impl Cycle {
+    pub fn new(cfg: &Config, observer: bool) -> Cycle {
+        if !observer {
+            return Cycle { spec: cfg.epochs, current: cfg.current_epoch, report: cfg.report_epoch, observer };
+        }
+        let spec = cfg.epochs.days();
+        let current = spec.at(now()).unwrap_or(0);
+        Cycle { spec, current, report: current.saturating_sub(1), observer }
     }
 }
 
@@ -158,6 +197,9 @@ pub struct Core {
 pub struct View {
     pub settings: Settings,
     pub enrolled: bool,
+    /// A dedicated observer (daily reports, published without threshold).
+    pub observer: bool,
+    pub cycle: Option<Cycle>,
     pub probe: ProbeStatus,
     pub probe_installed: bool,
     pub paused: bool,
@@ -196,9 +238,12 @@ impl Core {
         Ok(())
     }
 
+    pub fn cycle(&self) -> Option<Cycle> {
+        Some(Cycle::new(&self.config.as_ref()?.1, self.p.settings.observer()))
+    }
+
     pub fn current_report(&self) -> Option<&Report> {
-        let cfg = &self.config.as_ref()?.1;
-        self.p.reports.get(&cfg.report_epoch)
+        self.p.reports.get(&self.cycle()?.report)
     }
 
     pub fn view(&self) -> View {
@@ -209,6 +254,8 @@ impl Core {
         View {
             settings,
             enrolled: self.p.settings.enrolled(),
+            observer: self.p.settings.observer(),
+            cycle: self.cycle(),
             probe: self.probe.clone(),
             probe_installed: probe::installed(),
             paused: probe::is_paused(&self.p.settings.logs()),
@@ -224,33 +271,47 @@ impl Core {
         }
     }
 
-    /// Items of an epoch, as the participant sees them: near-identical
-    /// items merged, except those the participant removed.
+    /// Items of an epoch (a day for an observer), as the participant sees
+    /// them: near-identical items merged, except those the participant
+    /// removed. An observer's are not merged: exact versions are what it
+    /// is for, it has no token budget, and it is published anyway.
     pub fn items(&mut self, epoch: u32) -> Option<(Vec<Observed>, Skipped)> {
-        let spec = self.config.as_ref()?.1.epochs;
+        let cy = self.cycle()?;
         let s = &self.p.settings;
-        let (items, skipped) = self.cache.get(&s.logs(), spec, epoch, s.share_domains);
-        Some((merge::merge(items, &self.p.excluded), skipped))
+        let (items, skipped) = self.cache.get(&s.logs(), cy.spec, epoch, s.share_domains);
+        Some((if cy.observer { items } else { merge::merge(items, &self.p.excluded) }, skipped))
     }
 
     /// Opens the report of the current reporting epoch if none exists.
     /// Returns true when a new review starts.
     pub fn open_report(&mut self) -> bool {
-        let Some((_, cfg)) = &self.config else { return false };
-        if cfg.report_epoch >= cfg.current_epoch || self.p.reports.contains_key(&cfg.report_epoch) {
+        let Some(cy) = self.cycle() else { return false };
+        // A review the app could not end before its window closed.
+        let t = now();
+        for r in self.p.reports.values_mut().filter(|r| r.state == ReportState::Review && t >= r.send_by) {
+            r.state = ReportState::Failed;
+            r.error = Some("the reporting window closed before the report could be sent".into());
+        }
+        if cy.report >= cy.current || self.p.reports.contains_key(&cy.report) {
             return false;
         }
-        let e = cfg.report_epoch;
-        let send_by = cfg.epochs.end(cfg.current_epoch);
-        let spread = self.p.settings.spread_minutes as i64 * 60;
+        let e = cy.report;
+        let send_by = cy.spec.end(cy.current);
+        // An observer sends its report in one request.
+        let spread = if cy.observer { 0 } else { self.p.settings.spread_minutes as i64 * 60 };
         // Leave time to send before the window closes.
-        let review_until = (now() + self.p.settings.review_hours as i64 * 3600).min(send_by - spread - 3600).max(now());
+        let mut review_until = (now() + self.p.settings.review_hours as i64 * 3600).min(send_by - spread - 3600).max(now());
+        // An observer waits for the probe's last records of the day (server
+        // names are written every 5 minutes), as peersig-observer does.
+        if cy.observer {
+            review_until = review_until.max(cy.spec.start(cy.current) + OBSERVER_AFTER_MIDNIGHT);
+        }
         self.p.reports.insert(
             e,
             Report {
                 epoch: e,
-                from: cfg.epochs.start(e),
-                to: cfg.epochs.end(e),
+                from: cy.spec.start(e),
+                to: cy.spec.end(e),
                 state: ReportState::Review,
                 review_until,
                 send_by,
@@ -265,7 +326,7 @@ impl Core {
                 key_id: None,
             },
         );
-        // Keep a year of history.
+        // Keep a year of history (two months of days for an observer).
         while self.p.reports.len() > 60 {
             let first = *self.p.reports.keys().next().unwrap();
             self.p.reports.remove(&first);
@@ -285,10 +346,12 @@ impl Core {
         if !self.p.settings.enrolled() {
             return Err("Join the study first.".into());
         }
-        let Some((_, cfg)) = &self.config else {
+        let Some(cy) = self.cycle() else {
             return Err("PeerSig has not reached the server yet; try again in a minute.".into());
         };
-        let next = day(cfg.epochs.end(cfg.current_epoch));
+        let next = day(cy.spec.end(cy.current));
+        let (this, period) = if cy.observer { ("Today's", "day") } else { ("This week's", "week") };
+        let day = |t: i64| if cy.observer { utc_day(t) } else { day(t) };
         match self.current_report() {
             Some(r) if r.state == ReportState::Review => {
                 let e = r.epoch;
@@ -297,12 +360,13 @@ impl Core {
             }
             Some(r) if r.state == ReportState::Sending => Err(format!("The report is being sent: {} of {} ballots so far.", r.sent, r.total)),
             Some(r) if r.state == ReportState::Sent => {
-                Err(format!("The report for the week of {} was sent. This week's can be sent from {}.", day(r.from), next))
+                Err(format!("The report for the {} of {} was sent. {} can be sent from {}.", period, day(r.from), this, next))
             }
-            Some(r) => Err(format!("The report for the week of {} could not be sent: {}", day(r.from), r.error.clone().unwrap_or_default())),
-            None if cfg.report_epoch >= cfg.current_epoch => Err(format!(
-                "Nothing to send yet: a week is reported once it is over. The first report covers this week; it can be sent from {}.",
-                next
+            Some(r) => Err(format!("The report for the {} of {} could not be sent: {}", period, day(r.from), r.error.clone().unwrap_or_default())),
+            None if cy.report >= cy.current => Err(format!(
+                "Nothing to send yet: a {p} is reported once it is over. The first report covers this {p}; it can be sent from {}.",
+                next,
+                p = period
             )),
             None => Err("The report is being prepared; try again in a minute.".into()),
         }
@@ -342,6 +406,26 @@ impl Core {
     pub fn sending(&self) -> bool {
         self.p.reports.values().any(|r| r.state == ReportState::Sending)
     }
+}
+
+/// An observer's report of `day`: every item, in one request with its
+/// code. `None`: the server had that day already.
+pub async fn observe(settings: &Settings, day: u32, real: Vec<Item>) -> Result<Option<ObserverReceipt>> {
+    let client = settings.client()?;
+    client.observe(&ObserverReport { code: settings.code.clone(), day, items: real }).await
+}
+
+/// Marks an observer's report sent.
+pub fn observed(core: &mut Core, day: u32, real: Vec<Item>) {
+    let Some(r) = core.p.reports.get_mut(&day) else { return };
+    let t = now();
+    r.total = real.len();
+    r.sent = real.len();
+    r.real = real;
+    r.state = ReportState::Sent;
+    r.started = Some(t);
+    r.finished = Some(t);
+    r.error = None;
 }
 
 /// Builds the ballots of `epoch` and its tokens. Runs without the core
@@ -441,6 +525,77 @@ mod tests {
         core.config = Some((t, cfg(2)));
         assert!(core.open_report());
         assert_eq!(core.due_for_preparation(), None, "a click last week must not skip this review");
+    }
+
+    /// An observer's code: daily periods, one report, counted apart.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn observer_reports_the_day_before() {
+        let t0 = now();
+        let origin = t0 - t0.rem_euclid(EpochSpec::DAY) - EpochSpec::WEEK;
+        let conn = db::open(":memory:").unwrap();
+        let code = db::new_observer_code();
+        db::add_observer_code(&conn, &code, "O01").unwrap();
+        let st = peersig_server::Settings { epochs: EpochSpec { origin, length: EpochSpec::WEEK }, tokens_per_epoch: 16, k_hello: 3, k_domain: 5, about_url: None };
+        let state = State::new(conn, st, system_clock()).unwrap();
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        let app = api::router(state.clone());
+        tokio::spawn(async move { axum::serve(l, app).await });
+
+        let tmp = std::env::temp_dir().join(format!("peersig-app-observer-{}", std::process::id()));
+        let logs = tmp.join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let today = (t0 - origin) / EpochSpec::DAY;
+        let y = origin + (today - 1) * EpochSpec::DAY + 43200;
+        let ts = chrono::DateTime::from_timestamp(y, 0).unwrap().to_rfc3339();
+        let name = chrono::DateTime::from_timestamp(y, 0).unwrap().format("peersig-%Y%m%d.jsonl").to_string();
+        let mut f = std::fs::File::create(logs.join(name)).unwrap();
+        for v in [
+            serde_json::json!({"type":"start","os":{"os":"macos","version":"27.0.1"}}),
+            serde_json::json!({"type":"hello","ts":ts,"transport":"tcp","ja4":"t13d1516h2_8daaf6152771_e5627efa2ab1","proc":"curl","app":{"name":"curl","version":"8.7.1","kind":"cli"}}),
+        ] {
+            writeln!(f, "{}", v).unwrap();
+        }
+        drop(f);
+
+        let mut core = Core::load(&tmp);
+        core.p.settings = Settings {
+            server: url,
+            relay: String::new(),
+            code: code.clone(),
+            review_hours: 0,
+            logs_dir: logs.display().to_string(),
+            consented: Some("now".into()),
+            ..Settings::default()
+        };
+        assert!(core.p.settings.observer());
+        let cfg = core.p.settings.client().unwrap().config().await.unwrap();
+        core.config = Some((now(), cfg));
+        let cy = core.cycle().unwrap();
+        assert_eq!((cy.observer, cy.spec.length, cy.current as i64, cy.report as i64), (true, EpochSpec::DAY, today, today - 1));
+        assert!(core.open_report());
+        let r = core.current_report().unwrap();
+        assert!(r.review_until <= (now() + 1).max(cy.spec.start(cy.current) + OBSERVER_AFTER_MIDNIGHT));
+        if r.review_until > now() {
+            core.request_send().unwrap(); // in the first minutes of the day (UTC)
+        }
+        let e = core.due_for_preparation().expect("no review");
+        assert_eq!(e as i64, today - 1);
+        let r = core.current_report().unwrap();
+        assert_eq!((r.from, r.to), (cy.spec.start(e), cy.spec.end(e)));
+        let real: Vec<Item> = core.items(e).unwrap().0.into_iter().map(|o| o.item).collect();
+        assert_eq!(real.len(), 1);
+        assert!(observe(&core.p.settings, e, real.clone()).await.unwrap().is_some());
+        observed(&mut core, e, real.clone());
+        assert_eq!(core.current_report().unwrap().state, ReportState::Sent);
+        assert!(core.request_send().unwrap_err().contains("Today's can be sent from"));
+        // Sent again (a lost answer): not counted twice.
+        assert!(observe(&core.p.settings, e, real).await.unwrap().is_none());
+        let (observers, items) = db::observed_day(&state.db.lock().unwrap(), e).unwrap();
+        assert_eq!((observers, items.len()), (1, 1));
+        let counts: i64 = state.db.lock().unwrap().query_row("SELECT COUNT(*) FROM counts", [], |r| r.get(0)).unwrap();
+        assert_eq!(counts, 0, "an observer's items never reach the participants' counts");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// A week of logs, reviewed, prepared, sent: what reaches the server.

@@ -163,8 +163,26 @@ fn dashboard(w: &Web, a: &Admin, q: &Done) -> Result<String> {
 
     let mut rows = String::new();
     for c in codes.iter().rev() {
-        let epochs: Vec<String> = c.epochs.iter().map(|(ep, t)| format!("{} ({})", ep, t)).collect();
-        let (status, button) = if c.revoked { ("revoked", "Restore") } else { ("active", "Revoke") };
+        let epochs: Vec<String> = if c.observer {
+            // Days reported (items), most recent first.
+            let days = st.settings.epochs.days();
+            c.epochs
+                .iter()
+                .rev()
+                .take(14)
+                .map(|(d, n)| {
+                    let day = chrono::DateTime::from_timestamp(days.start(*d), 0).map(|t| t.date_naive().to_string()).unwrap_or_default();
+                    format!("{} ({})", day, n)
+                })
+                .collect()
+        } else {
+            c.epochs.iter().map(|(ep, t)| format!("{} ({})", ep, t)).collect()
+        };
+        let (status, button) = match (c.revoked, c.observer) {
+            (true, _) => ("revoked", "Restore"),
+            (false, true) => ("observer", "Revoke"),
+            (false, false) => ("active", "Revoke"),
+        };
         let restore = if c.revoked { r#"<input type="hidden" name="restore" value="1">"# } else { "" };
         rows.push_str(&format!(
             r#"<tr class="{status}"><td><b>{label}</b></td><td>{created}</td><td>{status}</td><td>{epochs}</td>
@@ -224,7 +242,7 @@ fn dashboard(w: &Web, a: &Admin, q: &Done) -> Result<String> {
   <label>Label prefix <input name="prefix" value="P" maxlength="12" pattern="[A-Za-z0-9]+" required></label>
   <button class="btn primary" type="submit">Create</button>
 </form>
-<p class="muted small">Each new code is shown once: the server keeps its hash. Labels: P (or your prefix) from here or the command line, M by e-mail, G with GitHub, N from the network. A revoked code gets no more tokens; ballots it already sent stay counted, since nothing links them to it.</p>
+<p class="muted small">Each new code is shown once: the server keeps its hash. Labels: P (or your prefix) from here or the command line, M by e-mail, G with GitHub, N from the network, O for dedicated observers (made on the server only: <code>codes add --observer</code>; for them, the days they reported and how many items). A revoked code gets no more tokens; ballots it already sent stay counted, since nothing links them to it.</p>
 <table><thead><tr><th>Label</th><th>Created</th><th>Status</th><th>Epochs (tokens)</th><th></th></tr></thead><tbody>{rows}</tbody></table>
 
 <h2 id="bans">Bans</h2>

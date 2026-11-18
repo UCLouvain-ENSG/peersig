@@ -102,12 +102,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y libpcap-dev
-      - run: cargo build --locked --release -p peersig-server -p peersig-relay -p peersig-probe
+      - run: cargo build --locked --release -p peersig-server -p peersig-relay -p peersig-probe -p peersig-observer
       - name: Upload
         run: |
           d=peersig-$TAG-linux-x86_64
           mkdir $d
-          cp target/release/peersig-server target/release/peersig-relay target/release/peersig-probe README.md LICENSE $d/
+          cp target/release/peersig-server target/release/peersig-relay target/release/peersig-probe target/release/peersig-observer README.md LICENSE docs/observers.md $d/
           tar -czf $d.tar.gz $d
           gh release upload "$TAG" $d.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
 

@@ -11,11 +11,15 @@
 //!   sees the content but not the address.
 //! - [`plan`]: turns a week's items into the shuffled list of ballots.
 //! - [`wire`]: API messages.
+//! - [`code`]: enrollment codes, and how to tell an observer's.
+//! - [`logs`]: reads the probe's daily logs into one period's items.
 //! - `client` (feature `client`): the HTTP client used by the app.
 
 pub mod b64;
+pub mod code;
 pub mod epoch;
 pub mod item;
+pub mod logs;
 pub mod merge;
 pub mod oblivious;
 pub mod plan;

@@ -67,6 +67,17 @@ enum Cmd {
         /// json, or classifier (the Iris traffic classifier's ja4_fingerprints.json format)
         #[arg(long, default_value = "json")]
         format: String,
+        /// The dedicated observers' daily table instead (no threshold):
+        /// every day, or the days from --day on.
+        #[arg(long)]
+        observers: bool,
+        /// With --observers: this day only (YYYY-MM-DD, UTC), or with
+        /// --since, from this day on.
+        #[arg(long, requires = "observers")]
+        day: Option<String>,
+        /// With --observers and --day: that day and the following ones.
+        #[arg(long, requires = "day")]
+        since: bool,
     },
 }
 
@@ -182,9 +193,15 @@ enum CodesCmd {
     Add {
         #[arg(long, default_value_t = 1)]
         count: u32,
-        /// Labels are <prefix>01, <prefix>02...
-        #[arg(long, default_value = "P")]
-        prefix: String,
+        /// Labels are <prefix>01, <prefix>02... Default: P, or O with
+        /// --observer.
+        #[arg(long)]
+        prefix: Option<String>,
+        /// Codes for dedicated observers (OBS-XXXX-XXXX-XXXX): machines run
+        /// for the study, which report daily and whose items are published
+        /// without threshold. Never give one to a participant.
+        #[arg(long)]
+        observer: bool,
     },
     /// Labels, and the epochs each one took part in.
     List,
@@ -226,6 +243,16 @@ fn settings(c: &rusqlite::Connection, p: &Params) -> Result<Settings> {
     })
 }
 
+/// "Microsoft Teams 26289 (app, chromium 156, macos 27)".
+fn classifier_desc(os: &str, app: &peersig_proto::AppRef) -> String {
+    let mut d = app.name.clone();
+    if let Some(v) = &app.version {
+        d.push_str(&format!(" {}", v));
+    }
+    d.push_str(&format!(" ({}{}, {})", app.kind, app.engine.as_deref().map(|e| format!(", {}", e)).unwrap_or_default(), os));
+    d
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
     let cli = Cli::parse();
@@ -264,18 +291,37 @@ fn main() -> Result<()> {
                 anyhow::Ok(())
             })?;
         }
-        Cmd::Codes { cmd: CodesCmd::Add { count, prefix } } => {
+        Cmd::Codes { cmd: CodesCmd::Add { count, prefix, observer } } => {
             let mut conn = conn;
-            for (label, code) in db::add_codes(&mut conn, count, &prefix)? {
+            let made = if observer {
+                db::add_observer_codes(&mut conn, count, prefix.as_deref().unwrap_or("O"))?
+            } else {
+                db::add_codes(&mut conn, count, prefix.as_deref().unwrap_or("P"))?
+            };
+            for (label, code) in made {
                 println!("{}\t{}", label, code);
             }
-            eprintln!("Only a hash of each code is stored: give each participant theirs now.");
+            if observer {
+                eprintln!("Only a hash of each code is stored. Each code makes one machine a dedicated observer: its items are published every day, without threshold.");
+            } else {
+                eprintln!("Only a hash of each code is stored: give each participant theirs now.");
+            }
         }
         Cmd::Codes { cmd: CodesCmd::List } => {
-            println!("label\tcreated\tstatus\tepochs (tokens)");
+            let day = |d: u32| chrono::DateTime::from_timestamp(s.epochs.days().start(d), 0).map(|t| t.date_naive().to_string()).unwrap_or_default();
+            println!("label\tcreated\tstatus\tepochs (tokens), or for observers: days (items)");
             for r in db::list_codes(&conn)? {
-                let ep: Vec<String> = r.epochs.iter().map(|(e, t)| format!("{} ({})", e, t)).collect();
-                println!("{}\t{}\t{}\t{}", r.label, r.created, if r.revoked { "revoked" } else { "active" }, ep.join(", "));
+                let ep: Vec<String> = if r.observer {
+                    r.epochs.iter().rev().map(|(d, n)| format!("{} ({})", day(*d), n)).collect()
+                } else {
+                    r.epochs.iter().map(|(e, t)| format!("{} ({})", e, t)).collect()
+                };
+                let status = match (r.revoked, r.observer) {
+                    (true, _) => "revoked",
+                    (false, true) => "observer",
+                    (false, false) => "active",
+                };
+                println!("{}\t{}\t{}\t{}", r.label, r.created, status, ep.join(", "));
             }
         }
         Cmd::Codes { cmd: CodesCmd::Revoke { code_or_label } } => {
@@ -291,8 +337,60 @@ fn main() -> Result<()> {
                 let start = chrono::DateTime::from_timestamp(s.epochs.start(e.epoch), 0).unwrap().date_naive();
                 println!("{}\t{}\t{}\t{}\t{}\t{}\t{}", e.epoch, start, e.codes, e.tokens, e.presence, e.ballots, e.items);
             }
+            let days = db::observed_days(&conn)?;
+            if !days.is_empty() {
+                println!("\nobservers' day\tobservers\tdistinct items");
+                for (d, observers, items) in days.into_iter().take(14) {
+                    let start = chrono::DateTime::from_timestamp(s.epochs.days().start(d), 0).unwrap().date_naive();
+                    println!("{}\t{}\t{}", start, observers, items);
+                }
+            }
         }
-        Cmd::Export { format } => {
+        Cmd::Export { format, observers: true, day, since } => {
+            let days = s.epochs.days();
+            let number = |name: &str| -> Result<u32> {
+                let d = chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").context("--day: YYYY-MM-DD")?;
+                days.at(d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()).context("--day: before the collection")
+            };
+            let wanted: Vec<u32> = match (&day, since) {
+                (Some(d), false) => vec![number(d)?],
+                (Some(d), true) => {
+                    let from = number(d)?;
+                    db::observed_days(&conn)?.into_iter().map(|x| x.0).filter(|x| *x >= from).rev().collect()
+                }
+                (None, _) => db::observed_days(&conn)?.into_iter().map(|x| x.0).rev().collect(),
+            };
+            let table: Vec<_> = wanted.into_iter().map(|d| release::observed(&conn, &s, d)).collect::<Result<_>>()?;
+            match format.as_str() {
+                "json" if day.is_some() && !since => println!("{}", serde_json::to_string_pretty(&table[0])?),
+                "json" => println!("{}", serde_json::to_string_pretty(&table)?),
+                "classifier" => {
+                    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                    let mut by_ja4: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+                    for d in &table {
+                        for oi in &d.items {
+                            if let Item::Hello { os, ja4, app, .. } = &oi.item {
+                                by_ja4.entry(ja4.clone()).or_default().insert(classifier_desc(os, app));
+                            }
+                        }
+                    }
+                    let rows: Vec<serde_json::Value> = by_ja4
+                        .into_iter()
+                        .map(|(ja4, apps)| {
+                            serde_json::json!({
+                                "ja4_hash": ja4,
+                                "desc": format!("{} (PeerSig observers)", apps.into_iter().collect::<Vec<_>>().join("; ")),
+                                "source": "peersig-observer",
+                                "fetched": today,
+                            })
+                        })
+                        .collect();
+                    println!("{}", serde_json::to_string_pretty(&rows)?);
+                }
+                f => bail!("unknown format {}", f),
+            }
+        }
+        Cmd::Export { format, .. } => {
             let now = chrono::Utc::now().timestamp();
             let until = s.epochs.at(now).unwrap_or(0).saturating_sub(1);
             let r = release::released(&conn, &s, until)?;
@@ -303,12 +401,7 @@ fn main() -> Result<()> {
                     let mut by_ja4: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
                     for ri in &r.items {
                         if let Item::Hello { os, ja4, app, .. } = &ri.item {
-                            let mut d = app.name.clone();
-                            if let Some(v) = &app.version {
-                                d.push_str(&format!(" {}", v));
-                            }
-                            d.push_str(&format!(" ({}{}, {})", app.kind, app.engine.as_deref().map(|e| format!(", {}", e)).unwrap_or_default(), os));
-                            by_ja4.entry(ja4.clone()).or_default().insert(d);
+                            by_ja4.entry(ja4.clone()).or_default().insert(classifier_desc(os, app));
                         }
                     }
                     let rows: Vec<serde_json::Value> = by_ja4

@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/probe", "crates/proto", "crates/server", "crates/relay", "crates/app"]
+members = ["crates/probe", "crates/proto", "crates/server", "crates/relay", "crates/observer", "crates/app"]
 # The app needs a desktop toolchain (WebKit/GTK); build it with -p peersig-app.
-default-members = ["crates/probe", "crates/proto", "crates/server", "crates/relay"]
+default-members = ["crates/probe", "crates/proto", "crates/server", "crates/relay", "crates/observer"]
 
 [workspace.package]
 version = "0.1.4"

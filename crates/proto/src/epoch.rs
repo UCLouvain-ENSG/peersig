@@ -1,6 +1,7 @@
 //! Collection periods. Observations are grouped by epoch (a week by
 //! default); epoch `e` is reported during epoch `e + 1`, and the server
-//! stores nothing finer than the epoch number.
+//! stores nothing finer than the epoch number. Dedicated observers report
+//! per day instead: [`EpochSpec::days`], from the same origin.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +15,12 @@ pub struct EpochSpec {
 
 impl EpochSpec {
     pub const WEEK: i64 = 7 * 24 * 3600;
+    pub const DAY: i64 = 24 * 3600;
+
+    /// Days from the same origin (midnight UTC): what observers report.
+    pub fn days(&self) -> EpochSpec {
+        EpochSpec { origin: self.origin, length: Self::DAY }
+    }
 
     /// Epoch containing Unix time `t`, if after the origin.
     pub fn at(&self, t: i64) -> Option<u32> {

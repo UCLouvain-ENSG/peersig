@@ -20,6 +20,9 @@ accepted for the report epoch only.
 | `POST /v1/ballot` | OHTTP only | One ballot |
 | `GET /v1/released` | OHTTP or direct | Released items with noisy support |
 | `POST /v1/issue` | direct | Token issuance, authenticated by the enrollment code |
+| `POST /v1/observe` | direct | A dedicated observer's report of one day |
+| `GET /v1/released/observers` | direct | Days of the observers' table |
+| `GET /v1/released/observers/<YYYY-MM-DD>` | direct | One day of it: every item, no threshold |
 | `GET /` | direct | Web page: the collection, and how to get a code |
 | `POST /enroll/mail` | direct | Form `email=`: a code by e-mail (when `--smtp-url` is set) |
 | `GET /enroll/github`, `GET /enroll/github/callback` | direct | A code with a GitHub account (OAuth, no scope) |
@@ -112,6 +115,35 @@ refuse such a label.
    the anonymously fetched key.
 4. Schedule each ballot at a uniform random time over the spread window,
    and send them one per OHTTP request.
+
+## Dedicated observers
+
+An observer's code is `OBS-` and a participant's code form
+(`OBS-K7QF-2M9D-XW4P`); the server marks it as an observer's in `codes`.
+Observer days are `EpochSpec::days()`: one day (86 400 s) from the epochs'
+origin, midnight UTC. During day *d*, an observer reports day *d − 1*;
+days down to *d − 7* are still accepted.
+
+```text
+observer                                         server
+ config (OHTTP) -> epochs.origin
+ ObserverReport{code, day, items[]}  ->           code is an active observer's,
+                                                  day in [today − 7, today − 1],
+                                                  items valid, not empty, no presence;
+                                                  count once per (code, day)
+                                    <- 200 ObserverReceipt{label, day, items}
+                                       409 if that observer reported that day
+```
+
+At most 10 000 items per report (8 MiB). The server counts each distinct
+item once per observer: `observed(day, item, n)`, and
+`observer_days(code hash, day, items)`. `POST /v1/issue` refuses observer
+codes and `POST /v1/observe` participants' codes.
+
+`GET /v1/released/observers` returns
+`{"days": [{"day": "2026-11-17", "observers": 3, "items": 412}, …]}`, most
+recent first; `GET /v1/released/observers/2026-11-17` returns
+`{"day", "observers", "items": [{"item", "observers"}]}`.
 
 ## Release
 

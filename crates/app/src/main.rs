@@ -1,6 +1,7 @@
 //! PeerSig tray app. It shows what the probe collected, lets the
 //! participant remove items, and sends each week's report as anonymous
-//! ballots. The tray icon changes while ballots are being sent.
+//! ballots. The tray icon changes while ballots are being sent. With an
+//! observer's code, it sends each day's report instead (see core.rs).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -20,7 +21,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::{Mutex, Notify};
 
-use crate::core::{day, now, Core, ReportState};
+use crate::core::{now, utc_day, Core, ReportState};
 
 type Shared = Arc<Mutex<Core>>;
 struct Wake(Arc<Notify>);
@@ -68,8 +69,8 @@ async fn get_state(core: State<'_, Shared>) -> R<core::View> {
 #[tauri::command]
 async fn get_items(core: State<'_, Shared>, current: bool) -> R<serde_json::Value> {
     let mut c = core.lock().await;
-    let Some(cfg) = c.config.as_ref().map(|c| c.1.clone()) else { return Ok(json!(null)) };
-    let epoch = if current { cfg.current_epoch } else { cfg.report_epoch };
+    let Some(cy) = c.cycle() else { return Ok(json!(null)) };
+    let epoch = if current { cy.current } else { cy.report };
     let Some((items, skipped)) = c.items(epoch) else { return Ok(json!(null)) };
     let excluded = c.p.excluded.clone();
     let items: Vec<serde_json::Value> = items
@@ -82,8 +83,8 @@ async fn get_items(core: State<'_, Shared>, current: bool) -> R<serde_json::Valu
         .collect();
     Ok(json!({
         "epoch": epoch,
-        "from": cfg.epochs.start(epoch),
-        "to": cfg.epochs.end(epoch),
+        "from": cy.spec.start(epoch),
+        "to": cy.spec.end(epoch),
         "current": current,
         "items": items,
         "skipped": skipped,
@@ -119,6 +120,11 @@ async fn enroll(
     s.share_domains = share_domains;
     if s.server.is_empty() || s.code.is_empty() {
         return Err("The server address and the enrollment code are both needed.".into());
+    }
+    // A dedicated observer runs unattended: its daily report goes out
+    // shortly after midnight (UTC). Settings can add a review.
+    if s.observer() {
+        s.review_hours = 0;
     }
     // Checks the server, and the relay's and server's keys agree.
     let cfg = s.client().map_err(e2s)?.config().await.map_err(|e| format!("Cannot reach the server: {:#}", e))?;
@@ -242,6 +248,8 @@ fn update_tray(app: &AppHandle, v: &core::View) {
     let Some(tray) = app.tray_by_id("main") else { return };
     let status = if !v.enrolled {
         "Not enrolled: open PeerSig to join".to_string()
+    } else if v.observer && !v.paused && v.probe.running {
+        format!("Observing ({} handshakes seen)", v.probe.hellos)
     } else if v.paused {
         "Capture paused".to_string()
     } else if !v.probe.running {
@@ -249,16 +257,18 @@ fn update_tray(app: &AppHandle, v: &core::View) {
     } else {
         format!("Capturing ({} handshakes seen)", v.probe.hellos)
     };
+    let of = if v.observer { "Day of" } else { "Week of" };
+    let day = |t: i64| if v.observer { utc_day(t) } else { core::day(t) };
     let report = match &v.current {
         Some(r) if r.state == ReportState::Review => {
             let h = ((r.review_until - v.now).max(0) + 3599) / 3600;
-            format!("Week of {}: sends in {} h", day(r.from), h)
+            format!("{} {}: sends in {} h", of, day(r.from), h)
         }
         Some(r) if r.state == ReportState::Sending => format!("Sending week of {}: {}/{}", day(r.from), r.sent, r.total),
-        Some(r) if r.state == ReportState::Sent => format!("Week of {} sent", day(r.from)),
-        Some(r) => format!("Week of {}: not sent", day(r.from)),
-        None => match &v.config {
-            Some(c) if c.report_epoch >= c.current_epoch => format!("First report: from {}", day(c.epochs.end(c.current_epoch))),
+        Some(r) if r.state == ReportState::Sent => format!("{} {} sent", of, day(r.from)),
+        Some(r) => format!("{} {}: not sent", of, day(r.from)),
+        None => match &v.cycle {
+            Some(c) if c.report >= c.current => format!("First report: from {}", day(c.spec.end(c.current))),
             _ => "Nothing to send yet".to_string(),
         },
     };
@@ -277,7 +287,7 @@ fn update_tray(app: &AppHandle, v: &core::View) {
         let _ = t.pause.set_checked(v.paused);
         let _ = t.send.set_enabled(in_review.is_some());
         let _ = t.send.set_text(match in_review {
-            Some(r) => format!("Send the week of {} now", day(r.from)),
+            Some(r) => format!("Send the {} of {} now", if v.observer { "day" } else { "week" }, day(r.from)),
             None => "Send the report now".to_string(),
         });
     }
@@ -380,13 +390,19 @@ async fn tick(app: &AppHandle, core: &Shared) {
         let mut c = core.lock().await;
         if c.open_report() {
             let _ = c.save();
+            let observer = c.p.settings.observer();
+            let day = |t: i64| if observer { utc_day(t) } else { core::day(t) };
             if let Some(r) = c.current_report() {
-                let msg = format!(
-                    "Your report for the week of {} is ready. It will be sent in about {} hours: open PeerSig to see it, or remove items.",
-                    day(r.from),
-                    ((r.review_until - now()) + 1800) / 3600
-                );
-                notify(app, &msg);
+                // An observer without a review sends unattended: nothing to announce.
+                if !observer || settings.review_hours > 0 {
+                    let msg = format!(
+                        "Your report for the {} of {} is ready. It will be sent in about {} hours: open PeerSig to see it, or remove items.",
+                        if observer { "day" } else { "week" },
+                        day(r.from),
+                        ((r.review_until - now()) + 1800) / 3600
+                    );
+                    notify(app, &msg);
+                }
             }
         }
     }
@@ -403,7 +419,33 @@ async fn tick(app: &AppHandle, core: &Shared) {
             _ => None,
         }
     };
-    if let Some((e, cfg, real)) = due {
+    if let (Some((e, _, real)), true) = (&due, settings.observer()) {
+        let (e, real) = (*e, real.clone());
+        // A day with nothing seen is not sent (the server refuses it).
+        let r = if real.is_empty() { Ok(None) } else { core::observe(&settings, e, real.clone()).await };
+        let mut c = core.lock().await;
+        c.send_now = None;
+        match r {
+            // Counted, or counted before (a retry whose answer was lost).
+            Ok(_) => {
+                core::observed(&mut c, e, real);
+                c.last_error = None;
+            }
+            Err(err) => {
+                let msg = format!("{:#}", err);
+                if let Some(r) = c.p.reports.get_mut(&e) {
+                    if msg.contains("(400)") || msg.contains("(403)") || msg.contains("(413)") {
+                        r.state = ReportState::Failed;
+                    } else {
+                        r.review_until = now() + 600; // retry in 10 min
+                    }
+                    r.error = Some(msg.clone());
+                }
+                c.last_error = Some(msg);
+            }
+        }
+        let _ = c.save();
+    } else if let Some((e, cfg, real)) = due {
         let r = core::prepare(&settings, &cfg, real).await;
         let mut c = core.lock().await;
         match r {

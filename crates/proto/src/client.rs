@@ -1,5 +1,6 @@
 //! HTTP client for the app: oblivious requests through the relay (or the
-//! server's own gateway), and the one direct request, token issuance.
+//! server's own gateway), and the direct requests: token issuance, and a
+//! dedicated observer's daily report.
 
 use anyhow::{bail, Context, Result};
 use serde::de::DeserializeOwned;
@@ -116,6 +117,21 @@ impl Client {
             bail!("{}", error_text(status, &body));
         }
         Ok(serde_json::from_slice(&body)?)
+    }
+
+    /// A dedicated observer's report of one day. Direct: the code says who
+    /// sends it anyway. `None` when the server has that day already (409):
+    /// a retry whose first answer was lost, or a second run.
+    pub async fn observe(&self, report: &ObserverReport) -> Result<Option<ObserverReceipt>> {
+        let url = format!("{}{}", self.server, PATH_OBSERVE);
+        let r = self.http.post(&url).json(report).send().await.with_context(|| url.clone())?;
+        let status = r.status().as_u16();
+        let body = r.bytes().await?.to_vec();
+        match status {
+            200..=299 => Ok(Some(serde_json::from_slice(&body)?)),
+            409 => Ok(None),
+            _ => bail!("{}", error_text(status, &body)),
+        }
     }
 
     /// Sends one ballot. A token already spent (409) counts as sent: it is a

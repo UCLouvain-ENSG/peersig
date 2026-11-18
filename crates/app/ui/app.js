@@ -33,6 +33,15 @@ const day = (t) => new Date(t * 1000).toLocaleDateString(undefined, { weekday: "
 const when = (t) => new Date(t * 1000).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const iso = (s) => (s ? new Date(s).toLocaleString() : "never");
 const weekRange = (from, to) => `${day(from)} – ${day(to - 1)}`;
+// An observer reports days (UTC), a participant weeks.
+const unit = () => (state.observer ? "day" : "week");
+const utcDay = (t) => new Date(t * 1000).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+const period = (from, to) => (state.observer ? `Day of ${utcDay(from)} (UTC)` : `Week of ${weekRange(from, to)}`);
+// A dedicated observer's code: OBS-XXXX-XXXX-XXXX (crates/proto/src/code.rs).
+function isObserverCode(s) {
+  const n = s.toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1");
+  return n.length === 15 && n.startsWith("0BS");
+}
 function hours(sec) {
   if (sec <= 0) return "now";
   const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
@@ -88,6 +97,10 @@ function renderEnroll() {
   const server = el("input", { type: "url", placeholder: "https://peersig.example.org", value: state.settings.server || "" });
   const relay = el("input", { type: "url", placeholder: "https://relay.example.net", value: state.settings.relay || "" });
   const code = el("input", { type: "text", placeholder: "XXXX-XXXX-XXXX", autocomplete: "off" });
+  const observerNote = el("div", { class: "notice", hidden: true },
+    el("strong", {}, "Dedicated observer code. "),
+    "This computer will report every day, in one report the server knows comes from this observer, and each day's items are published as they are, without waiting for other participants. Use it only on a machine set up for the study, whose traffic may be published.");
+  code.addEventListener("input", () => (observerNote.hidden = !isObserverCode(code.value)));
   const getCode = el("button", { class: "btn", type: "button" }, "Get a code…");
   getCode.addEventListener("click", () => call("open_url", { url: server.value.trim() }));
   const domains = el("input", { type: "checkbox" });
@@ -109,10 +122,11 @@ function renderEnroll() {
   return el("div", { class: "card" },
     el("h2", {}, "Join the study"),
     el("p", {}, "PeerSig watches the start of the encrypted connections this computer makes (the TLS “ClientHello”), notes which application made each one, and once a week contributes that list to a research study."),
-    el("p", {}, "What it sends: application names and versions, the fingerprint (JA4) of their handshakes, and the OS family. Builds of one version line are merged first (2.1.322 and 2.1.326 go as 2.1.*). Never: addresses, the sites you visit, times, file paths or your name. Each item travels as a separate anonymous ballot that the server cannot tie to you or to your other items. Each week you get a day to look at the list and remove anything before it is sent."),
+    el("p", {}, "What it sends: the applications (name, bundle id, version, signing team, kind, browser engine), the fingerprint (JA4) of their handshakes, and the OS family; if you choose, the server names non-browser applications connect to. Builds of one version line are merged first (2.1.322 and 2.1.326 go as 2.1.*). Never: addresses, the sites you visit, times, file paths or your name. Each item travels as a separate anonymous ballot that the server cannot tie to you or to your other items. Each week you get a day to look at the list and remove anything before it is sent."),
     el("label", { class: "field" }, el("span", {}, "Collection server"), server),
     el("label", { class: "field" }, el("span", {}, "Relay (hides your address from the server)"), relay),
     el("label", { class: "field" }, el("span", {}, "Enrollment code"), code),
+    observerNote,
     el("p", { class: "muted small" }, "The study's web page gives you a code: in one click from the university's network, or by e-mail, or with a GitHub account. The code only lets this computer send a limited number of anonymous ballots each week, so that nobody else can flood the study; it does not identify your ballots."),
     el("div", { class: "row" }, getCode),
     el("label", { class: "check" }, domains,
@@ -155,11 +169,14 @@ function reportCard() {
   if (!state.config) {
     body.push(el("p", { class: "muted" }, "Waiting for the server's configuration."));
   } else if (!r) {
-    const c = state.config;
+    const cy = state.cycle;
+    const from = cy.spec.origin + cy.current * cy.spec.length, to = from + cy.spec.length;
     body.push(el("div", { class: "big" }, "Collecting"));
-    body.push(el("p", { class: "muted" }, `This week (${weekRange(c.epochs.origin + c.current_epoch * c.epochs.length, c.epochs.origin + (c.current_epoch + 1) * c.epochs.length)}) will be reported next week, after a day for you to review it.`));
+    body.push(el("p", { class: "muted" }, state.observer
+      ? `Today (${utcDay(from)}, UTC) will be reported tomorrow${state.settings.review_hours ? `, after ${state.settings.review_hours} hours for you to review it` : ", shortly after midnight UTC"}.`
+      : `This week (${weekRange(from, to)}) will be reported next week, after a day for you to review it.`));
   } else {
-    body.push(el("div", { class: "muted small" }, `Week of ${weekRange(r.from, r.to)}`));
+    body.push(el("div", { class: "muted small" }, period(r.from, r.to)));
     if (r.state === "review") {
       body.push(el("div", { class: "big" }, `Sends in ${hours(r.review_until - state.now)}`));
       body.push(el("p", { class: "muted" }, "Look at the items and untick anything you do not want to send."));
@@ -171,13 +188,13 @@ function reportCard() {
       body.push(el("progress", { max: r.total, value: r.sent }));
       body.push(el("p", { class: "muted small" }, `${r.real.length} items, one anonymous ballot each, at random times.`));
     } else if (r.state === "sent") {
-      body.push(el("div", { class: "big ok" }, "Sent"), el("p", { class: "muted" }, `${r.total} ballots on ${when(r.finished)}.`));
+      body.push(el("div", { class: "big ok" }, "Sent"), el("p", { class: "muted" }, state.observer ? `${r.real.length} items in one report, on ${when(r.finished)}.` : `${r.total} ballots on ${when(r.finished)}.`));
     } else {
       body.push(el("div", { class: "big bad" }, "Not sent"), el("p", { class: "muted" }, r.error || ""));
     }
     if (r.error && r.state !== "failed") body.push(el("div", { class: "notice error small" }, r.error));
   }
-  return el("div", { class: "card" }, el("h2", {}, "This week's report"), ...body);
+  return el("div", { class: "card" }, el("h2", {}, state.observer ? "Daily report" : "This week's report"), ...body);
 }
 
 function connectionCard() {
@@ -185,9 +202,11 @@ function connectionCard() {
   return el("div", { class: "card" },
     el("h2", {}, "Connection"),
     el("p", {}, "Server: ", el("span", { class: "mono" }, s.server)),
-    s.relay
-      ? el("p", {}, "Relay: ", el("span", { class: "mono" }, s.relay))
-      : el("div", { class: "notice" }, "No relay: the server sees this computer's address when ballots arrive (not what they contain to whom)."),
+    state.observer
+      ? el("div", { class: "notice" }, "Dedicated observer: this computer reports every day, and its items are published daily, without threshold.")
+      : s.relay
+        ? el("p", {}, "Relay: ", el("span", { class: "mono" }, s.relay))
+        : el("div", { class: "notice" }, "No relay: the server sees this computer's address when ballots arrive (not what they contain to whom)."),
     el("p", { class: "muted small" }, `Enrollment code ${s.code}`),
     state.last_error ? el("div", { class: "notice error small" }, state.last_error) : null,
   );
@@ -200,7 +219,8 @@ function renderOverview() {
 // ------------------------------------------------------------ items
 
 function describe(item) {
-  if (item.type === "hello") return [`${item.transport.toUpperCase()} handshake`, el("div", { class: "mono" }, item.ja4)];
+  if (item.type === "hello") return [`${item.transport.toUpperCase()} handshake`, el("div", { class: "mono" }, item.ja4),
+    item.ja4_legacy ? el("div", { class: "mono muted small", title: "The JA4 the Iris classifier stored before 2026-11-16" }, `legacy ${item.ja4_legacy}`) : null];
   if (item.type === "domain") return [`${item.ja4.startsWith("q") ? "QUIC" : "TCP"} connection to`, el("div", { class: "mono" }, item.domain), el("div", { class: "mono muted small" }, item.ja4)];
   return [item.type];
 }
@@ -208,8 +228,8 @@ function describe(item) {
 function renderItems() {
   const head = el("div", { class: "row" },
     el("div", { class: "segmented" },
-      el("button", { class: "btn", "aria-pressed": String(!itemsCurrent), onclick: () => { itemsCurrent = false; loadItems(); } }, "Week being reported"),
-      el("button", { class: "btn", "aria-pressed": String(itemsCurrent), onclick: () => { itemsCurrent = true; loadItems(); } }, "This week so far")),
+      el("button", { class: "btn", "aria-pressed": String(!itemsCurrent), onclick: () => { itemsCurrent = false; loadItems(); } }, `${state.observer ? "Day" : "Week"} being reported`),
+      el("button", { class: "btn", "aria-pressed": String(itemsCurrent), onclick: () => { itemsCurrent = true; loadItems(); } }, state.observer ? "Today so far" : "This week so far")),
     el("button", { class: "btn", onclick: loadItems }, "Refresh"));
   if (!items) return el("div", {}, head, el("p", { class: "muted" }, "Loading…"));
   const rows = items.items.map((o) => {
@@ -225,24 +245,31 @@ function renderItems() {
       el("td", {}, box),
       el("td", {}, el("div", {}, app.name, app.version ? el("span", { class: "muted" }, " " + app.version) : null,
           o.merged ? el("span", { class: "muted small", title: o.merged.join("\n") }, ` · ${o.merged.length} merged`) : null),
-        el("span", { class: "chip" }, app.kind || ""), app.engine ? el("span", { class: "muted small" }, " " + app.engine) : null),
+        el("span", { class: "chip" }, app.kind || ""), app.engine ? el("span", { class: "muted small" }, " " + app.engine) : null,
+        app.id || app.team_id ? el("div", { class: "mono muted small" }, [app.id, app.team_id ? `team ${app.team_id}` : null].filter(Boolean).join(" · ")) : null),
       el("td", {}, ...describe(it)),
       el("td", { class: "muted" }, o.count.toLocaleString()),
       el("td", { class: "muted small" }, [...o.procs].join(", ")));
     return tr;
   });
   const sk = items.skipped;
+  const os = items.items.map((o) => o.item.os).find(Boolean);
+  const what = state.observer
+    ? (items.current ? `Today so far: ${utcDay(items.from)} (UTC)` : `Day being reported: ${utcDay(items.from)} (UTC)`)
+    : `${items.current ? "This week so far" : "Week being reported"}: ${weekRange(items.from, items.to)}`;
   return el("div", {},
     head,
-    el("p", { class: "muted" }, `${items.current ? "This week so far" : "Week being reported"}: ${weekRange(items.from, items.to)}. ${items.items.length} items.`),
+    el("p", { class: "muted" }, `${what}. ${items.items.length} items.`),
     el("table", {},
       el("thead", {}, el("tr", {}, el("th", {}, "Send"), el("th", {}, "Application"), el("th", {}, "What"), el("th", {}, "Seen ¹"), el("th", {}, "Processes ¹"))),
       el("tbody", {}, rows.length ? rows : el("tr", {}, el("td", { colspan: 5, class: "muted" }, "Nothing yet.")))),
-    el("p", { class: "muted small" }, "¹ Stays on this computer. Only the application, its version, the OS family and the fingerprint (with the server name, if you share them) are sent, once per week, not how often."),
+    el("p", { class: "muted small" }, `¹ Stays on this computer: how often, and which processes. Everything else in a ticked row is sent, as shown: the application (name, version, kind, engine, bundle id, signing team), the transport and fingerprint, and the server name of a “connection to” row (those carry no version). Each item also gives the OS family${os ? ` (${os})` : ""}. Once per ${unit()}, however often it was seen.`),
     el("p", { class: "muted small" },
       `Not collected: ${sk.unattributed} handshakes with no known application; ${sk.browser_domains} names contacted by browsers (browsing history is never collected)` +
       (state.settings.share_domains ? `; ${sk.private_domains} local or private names; ${sk.not_sni} names seen only in DNS or plain HTTP.` : `; ${sk.domains_off} server names (sharing is off).`)),
-    el("p", { class: "muted small" }, "Each ticked item goes as a separate anonymous ballot: the server cannot tell which items come from the same person. An item is published only once enough participants reported it."),
+    el("p", { class: "muted small" }, state.observer
+      ? "Ticked items go in one report that the server knows comes from this observer, and are published with the day, as they are: no threshold."
+      : "Each ticked item goes as a separate anonymous ballot: the server cannot tell which items come from the same person. An item is published only once enough participants reported it."),
   );
 }
 
@@ -253,9 +280,10 @@ function renderHistory() {
   return el("div", {}, ...state.reports.map((r) =>
     el("div", { class: "card stacked" },
       el("div", { class: "row flush" },
-        el("strong", {}, `Week of ${weekRange(r.from, r.to)}`),
+        el("strong", {}, period(r.from, r.to)),
         el("span", { class: "chip" }, r.state)),
-      r.total ? el("p", { class: "muted" }, `${r.sent}/${r.total} ballots: ${r.real.length} items and one "took part" ballot${r.dropped ? `; ${r.dropped} items over the token budget were left out` : ""}.`) : null,
+      r.total && state.observer ? el("p", { class: "muted" }, `${r.real.length} items in one report.`) : null,
+      r.total && !state.observer ? el("p", { class: "muted" }, `${r.sent}/${r.total} ballots: ${r.real.length} items and one "took part" ballot${r.dropped ? `; ${r.dropped} items over the token budget were left out` : ""}.`) : null,
       r.error ? el("p", { class: "small bad" }, r.error) : null,
       r.real.length ? el("details", {}, el("summary", {}, "Real items sent"),
         el("ul", { class: "plain small" }, ...r.real.map((i) => el("li", {}, i.app ? `${i.app.name} ${i.app.version || ""} — ${i.type === "hello" ? i.ja4 : `${i.domain} (${i.ja4})`}` : i.type)))) : null,
@@ -265,12 +293,28 @@ function renderHistory() {
 
 // ------------------------------------------------------------ privacy
 
+function renderObserverPrivacy() {
+  return el("div", { class: "card" },
+    el("h2", {}, "This computer is a dedicated observer"),
+    el("ul", { class: "plain" },
+      el("li", {}, el("strong", {}, "What is sent. "), "Each day (UTC): which applications (name, bundle id, version, signing team, kind, engine) sent which handshake fingerprint, on which OS family; if sharing is on, the server names non-browser applications connected to. No addresses, times, counts, file paths, user or host names."),
+      el("li", {}, el("strong", {}, "Not anonymous. "), "The day's items go in one report with this computer's observer code: the server knows they come from this observer. It keeps a count per item and day, and which observers reported which day."),
+      el("li", {}, el("strong", {}, "Published daily. "), "Each day's items are published with the number of observers that reported them, without waiting for other participants."),
+      el("li", {}, el("strong", {}, "Review. "), state.settings.review_hours ? `Each day's list waits ${state.settings.review_hours} hours before it is sent; untick anything.` : "No review: each day's list is sent shortly after midnight UTC. Settings can add one."),
+      el("li", {}, el("strong", {}, "Apart from participants. "), "Observers' items never count towards the participants' table."),
+      el("li", {}, el("strong", {}, "Local logs. "), "The capture logs stay on this computer and are deleted after two weeks."),
+    ),
+    el("div", { class: "row" }, el("button", { class: "btn", onclick: () => call("open_url", { url: "https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/observers.md" }) }, "About observers")),
+  );
+}
+
 function renderPrivacy() {
+  if (state.enrolled && state.observer) return renderObserverPrivacy();
   const c = state.config;
   return el("div", { class: "card" },
     el("h2", {}, "How your data is protected"),
     el("ul", { class: "plain" },
-      el("li", {}, el("strong", {}, "Little leaves your computer. "), "Per week: which applications (name, version, kind) sent which handshake fingerprint, on which OS family. Optional: the server names (SNI) non-browser applications connect to, with the fingerprint used. No addresses, times, counts, file paths, user or host names."),
+      el("li", {}, el("strong", {}, "Little leaves your computer. "), "Per week: which applications (name, bundle id, version, signing team, kind, engine) sent which handshake fingerprint, on which OS family. Optional: the server names (SNI) non-browser applications connect to, with the fingerprint used. No addresses, times, counts, file paths, user or host names."),
       el("li", {}, el("strong", {}, "Less specific items. "), "Before you review them, items that differ only in a detail are merged: versions after major.minor (2.1.322 and 2.1.326 go as 2.1.*) and numbered server names (p177-fmip.icloud.com and p63-fmip.icloud.com go as p*-fmip.icloud.com). A rare build points to fewer people, and more items fit the weekly budget. An item you remove is never merged into another."),
       el("li", {}, el("strong", {}, "You review it first. "), `Each week's list waits ${state.settings.review_hours} hours before it is sent; untick anything.`),
       el("li", {}, el("strong", {}, "Anonymous ballots. "), "Every item is a separate ballot carrying a token the server signed without seeing it (blind signature, as in anonymous e-voting). The server knows the ballot comes from an enrolled participant, not which one, nor which ballots come from the same person."),
@@ -312,8 +356,8 @@ function renderSettings() {
       el("h2", {}, "Sending"),
       el("label", { class: "field" }, el("span", {}, "Relay"), relay),
       el("label", { class: "check" }, domains, el("span", {}, "Share the server names (SNI) non-browser applications connect to")),
-      el("label", { class: "field" }, el("span", {}, "Hours to review each week's report before it is sent"), review),
-      el("label", { class: "field" }, el("span", {}, "Spread the ballots over (minutes)"), spread),
+      el("label", { class: "field" }, el("span", {}, `Hours to review each ${unit()}'s report before it is sent`), review),
+      state.observer ? null : el("label", { class: "field" }, el("span", {}, "Spread the ballots over (minutes)"), spread),
       el("div", { class: "row" }, save)),
     el("div", { class: "card" },
       el("h2", {}, "This computer"),

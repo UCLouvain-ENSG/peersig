@@ -1,6 +1,8 @@
 //! PeerSig collection server: issues blind ballot tokens to enrolled
 //! participants, counts anonymous ballots arriving through Oblivious HTTP,
-//! and publishes the items reported by enough participants.
+//! and publishes the items reported by enough participants. Apart from
+//! them, it counts the daily reports of dedicated observers, and publishes
+//! those day by day, without threshold.
 
 pub mod admin;
 pub mod api;
@@ -65,6 +67,13 @@ impl State {
     pub fn epochs(&self) -> Option<(u32, u32)> {
         let cur = self.settings.epochs.at((self.clock)())?;
         Some((cur, cur.saturating_sub(1)))
+    }
+
+    /// (today, first day an observer may still report): days from the
+    /// epochs' origin. Observers report days before today.
+    pub fn observer_days(&self) -> Option<(u32, u32)> {
+        let today = self.settings.epochs.days().at((self.clock)())?;
+        Some((today, today.saturating_sub(peersig_proto::wire::OBSERVER_LATE_DAYS)))
     }
 
     /// The token key of `epoch`, created on first use.

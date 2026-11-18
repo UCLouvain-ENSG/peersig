@@ -3,20 +3,26 @@
 //! requests decrypted by the Oblivious HTTP gateway. Ballots are only
 //! accepted through the gateway. No handler sees or logs the client
 //! address. The web page for people is in [`crate::web`].
+//!
+//! Dedicated observers send one report per day, directly, with their code
+//! (`observe`); the observers' table is public (`observed_days`,
+//! `observed_day`).
 
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, State as AxState};
+use axum::extract::{DefaultBodyLimit, Path, State as AxState};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Serialize;
 
-use peersig_proto::oblivious;
+use std::collections::BTreeSet;
+
 use peersig_proto::token::{key_id, KEY_BITS};
 use peersig_proto::wire::*;
+use peersig_proto::{oblivious, Class, Item};
 
 use crate::db::{self, Spend};
 use crate::State;
@@ -74,9 +80,12 @@ pub fn issue(s: &State, body: &[u8]) -> Reply {
         return err(400, format!("tokens are issued for epoch {} only", report));
     }
     let hash = db::code_hash(&req.code);
-    match db::code_active(&s.db.lock().unwrap(), &hash) {
-        Ok(Some(true)) => {}
-        Ok(Some(false)) => return err(403, "this enrollment code was withdrawn"),
+    match db::code_status(&s.db.lock().unwrap(), &hash) {
+        Ok(Some(c)) if !c.active => return err(403, "this enrollment code was withdrawn"),
+        // Observers' items are published without threshold: they must not
+        // count among the participants'.
+        Ok(Some(c)) if c.observer => return err(403, "this is a dedicated observer's code: it sends daily reports, not ballots"),
+        Ok(Some(_)) => {}
         Ok(None) => return err(403, "unknown enrollment code"),
         Err(e) => return internal(e),
     }
@@ -126,6 +135,85 @@ pub fn ballot(s: &State, body: &[u8]) -> Reply {
     match db::count_ballot(&mut s.db.lock().unwrap(), report, &b.token.nonce, &b.item) {
         Ok(Spend::Counted) => (204, vec![]),
         Ok(Spend::AlreadySpent) => err(409, "token already spent"),
+        Err(e) => internal(e),
+    }
+}
+
+/// "YYYY-MM-DD" of observer day `d`.
+fn day_name(s: &State, d: u32) -> String {
+    chrono::DateTime::from_timestamp(s.settings.epochs.days().start(d), 0).map(|t| t.date_naive().to_string()).unwrap_or_default()
+}
+
+fn day_number(s: &State, name: &str) -> Option<u32> {
+    let d = chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").ok()?;
+    s.settings.epochs.days().at(d.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
+}
+
+/// A dedicated observer's report of one day: counted once per observer
+/// and day, apart from participants' ballots.
+pub fn observe(s: &State, body: &[u8]) -> Reply {
+    let Ok(r) = serde_json::from_slice::<ObserverReport>(body) else { return err(400, "malformed report") };
+    let Some((today, first)) = s.observer_days() else { return err(503, "the collection has not started") };
+    if r.day >= today || r.day < first {
+        return err(
+            400,
+            format!("reports are accepted for the days from {} to {} (UTC)", day_name(s, first), day_name(s, today.saturating_sub(1))),
+        );
+    }
+    let hash = db::code_hash(&r.code);
+    let label = match db::code_status(&s.db.lock().unwrap(), &hash) {
+        Ok(Some(c)) if !c.active => return err(403, "this enrollment code was withdrawn"),
+        Ok(Some(c)) if !c.observer => return err(403, "not a dedicated observer's code"),
+        Ok(Some(c)) => c.label,
+        Ok(None) => return err(403, "unknown enrollment code"),
+        Err(e) => return internal(e),
+    };
+    if r.items.len() > OBSERVER_MAX_ITEMS {
+        return err(413, format!("at most {} items per report", OBSERVER_MAX_ITEMS));
+    }
+    // A day counts the observers that saw something.
+    if r.items.is_empty() {
+        return err(400, "an empty report: send nothing for a day with no items");
+    }
+    let mut seen = BTreeSet::new();
+    let mut items: Vec<Item> = Vec::new();
+    for it in r.items {
+        if it.class() == Class::Presence {
+            return err(400, "invalid item: presence is for participants");
+        }
+        if let Err(e) = it.validate() {
+            return err(400, format!("invalid item: {}", e));
+        }
+        if seen.insert(it.key()) {
+            items.push(it);
+        }
+    }
+    match db::count_observer_report(&mut s.db.lock().unwrap(), &hash, r.day, &items) {
+        Ok(Spend::Counted) => json(200, &ObserverReceipt { label, day: r.day, items: items.len() }),
+        Ok(Spend::AlreadySpent) => err(409, format!("{} already reported {}", label, day_name(s, r.day))),
+        Err(e) => internal(e),
+    }
+}
+
+/// The days of the observers' table.
+pub fn observed_days(s: &State) -> Reply {
+    match db::observed_days(&s.db.lock().unwrap()) {
+        Ok(days) => json(
+            200,
+            &ObservedDays {
+                days: days.into_iter().map(|(d, observers, items)| ObservedDaySummary { day: day_name(s, d), observers, items }).collect(),
+            },
+        ),
+        Err(e) => internal(e),
+    }
+}
+
+/// One day of the observers' table: every item, with how many observers
+/// reported it. No threshold.
+pub fn observed_day(s: &State, name: &str) -> Reply {
+    let Some(d) = day_number(s, name) else { return err(404, "no such day (YYYY-MM-DD)") };
+    match crate::release::observed(&s.db.lock().unwrap(), &s.settings, d) {
+        Ok(day) => json(200, &day),
         Err(e) => internal(e),
     }
 }
@@ -183,7 +271,17 @@ pub fn router(state: Arc<State>) -> Router {
             }),
         )
         .route(PATH_OHTTP, post(ohttp_h))
+        .route(PATH_OBSERVED, get(|AxState(s): AxState<Arc<State>>| blocking(move || observed_days(&s))))
+        .route(
+            &format!("{}/{{day}}", PATH_OBSERVED),
+            get(|AxState(s): AxState<Arc<State>>, Path(day): Path<String>| blocking(move || observed_day(&s, &day))),
+        )
         // Issuance of 512 tokens is about 180 kB of JSON.
         .layer(DefaultBodyLimit::max(512 * 1024))
+        // A day of a busy observer: up to OBSERVER_MAX_ITEMS items.
+        .route(
+            PATH_OBSERVE,
+            post(|AxState(s): AxState<Arc<State>>, body: Bytes| blocking(move || observe(&s, &body))).layer(DefaultBodyLimit::max(8 << 20)),
+        )
         .with_state(state)
 }

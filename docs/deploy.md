@@ -149,6 +149,19 @@ an e-mail address, a mail domain or a GitHub account from getting codes.
 The session is a signed cookie for 12 hours; removing a login from the list
 ends its sessions at the next restart.
 
+### Dedicated observers
+
+Machines the study runs, whose items are published every day without
+threshold, enroll with an observer code, made only on the server:
+
+```sh
+peersig-server --db peersig.db codes add --observer --count 12   # O01  OBS-K7QF-2M9D-XW4P ...
+```
+
+The admin page lists and revokes them, but does not make them. They run
+the app, or the probe and `peersig-observer` from the command line: see
+[observers.md](observers.md).
+
 The app's join screen fills in the addresses compiled in as
 `DEFAULT_SERVER` and `DEFAULT_RELAY` (`crates/app/src/core.rs`): change them
 for another collection.
@@ -161,7 +174,9 @@ peersig-server --db peersig.db export                      # released items, JSO
 peersig-server --db peersig.db export --format classifier  # Iris ja4_fingerprints.json format
 ```
 
-The released list is also public at `/v1/released`.
+The released list is also public at `/v1/released`; the observers' daily
+table at `/v1/released/observers` (`export --observers`, see
+[observers.md](observers.md#the-published-table)).
 
 ## Releases
 
@@ -171,7 +186,8 @@ Pushing a tag `v<version>` runs `.github/workflows/release.yml`:
   `.rpm`, `.AppImage`) and the Windows app (`.msi`, x64), each with the
   probe inside (on Windows it uses the system's packet capture: nothing
   else to install);
-- `peersig-server`, `peersig-relay` and `peersig-probe` for Linux x86_64;
+- `peersig-server`, `peersig-relay`, `peersig-probe` and
+  `peersig-observer` for Linux x86_64;
 - `SHA256SUMS`.
 
 They go to a **draft** release; check it and publish it on GitHub. The tag

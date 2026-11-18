@@ -16,13 +16,22 @@
 //!   same keyed hash, and mail domains, in clear; the admin's note and the
 //!   day. Never a network address.
 //! - `token_keys`, `meta`: the keys and the epoch layout.
+//!
+//! Dedicated observers (codes with `observer = 1`, made only with
+//! `codes add --observer`) are kept apart from participants:
+//!
+//! - `observer_days`: which observer reported which day, and how many
+//!   items. Like `issuance`, it says who took part when.
+//! - `observed`: one counter per (day, item): how many observers reported
+//!   it. Their reports are not stored either. These counts never mix with
+//!   `counts`, so observers never help a participant's item over k.
 
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
-use peersig_proto::{Class, Item};
+use peersig_proto::{code, Class, Item};
 
 pub const SCHEMA: &str = "
 PRAGMA journal_mode = DELETE;
@@ -42,11 +51,29 @@ DROP TABLE IF EXISTS catalogue;
 CREATE TABLE IF NOT EXISTS identities(hash TEXT PRIMARY KEY, codes INTEGER NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS bans(kind TEXT NOT NULL, value TEXT NOT NULL, note TEXT NOT NULL, created TEXT NOT NULL,
     PRIMARY KEY(kind, value)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS observer_days(hash TEXT NOT NULL, day INTEGER NOT NULL, items INTEGER NOT NULL,
+    PRIMARY KEY(hash, day)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS observed(day INTEGER NOT NULL, item TEXT NOT NULL, class TEXT NOT NULL, n INTEGER NOT NULL,
+    PRIMARY KEY(day, item)) WITHOUT ROWID;
 ";
+
+/// Columns added after a release, for databases made before.
+fn migrate(c: &Connection) -> Result<()> {
+    let has = |table: &str, col: &str| -> Result<bool> {
+        let mut st = c.prepare(&format!("PRAGMA table_info({})", table))?;
+        let cols: Vec<String> = st.query_map([], |r| r.get::<_, String>(1))?.collect::<Result<_, _>>()?;
+        Ok(cols.iter().any(|x| x == col))
+    };
+    if !has("codes", "observer")? {
+        c.execute_batch("ALTER TABLE codes ADD COLUMN observer INTEGER NOT NULL DEFAULT 0")?;
+    }
+    Ok(())
+}
 
 pub fn open(path: &str) -> Result<Connection> {
     let c = Connection::open(path).with_context(|| path.to_string())?;
     c.execute_batch(SCHEMA)?;
+    migrate(&c)?;
     Ok(c)
 }
 
@@ -81,15 +108,13 @@ pub fn new_code() -> String {
     format!("{}-{}-{}", &s[0..4], &s[4..8], &s[8..12])
 }
 
+/// A dedicated observer's code: `OBS-K7QF-2M9D-XW4P`.
+pub fn new_observer_code() -> String {
+    format!("{}-{}", code::OBSERVER_PREFIX, new_code())
+}
+
 pub fn normalize_code(code: &str) -> String {
-    code.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .map(|c| match c.to_ascii_uppercase() {
-            'O' => '0',
-            'I' | 'L' => '1',
-            c => c,
-        })
-        .collect()
+    code::normalize(code)
 }
 
 pub fn code_hash(code: &str) -> String {
@@ -102,9 +127,30 @@ pub fn add_code(c: &Connection, code: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// A dedicated observer's code (`new_observer_code`).
+pub fn add_observer_code(c: &Connection, code: &str, label: &str) -> Result<()> {
+    let day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    c.execute("INSERT INTO codes(hash, label, created, observer) VALUES(?1, ?2, ?3, 1)", params![code_hash(code), label, day])?;
+    Ok(())
+}
+
 /// Active code -> true; revoked -> false; unknown -> None.
 pub fn code_active(c: &Connection, hash: &str) -> Result<Option<bool>> {
-    Ok(c.query_row("SELECT revoked FROM codes WHERE hash = ?1", [hash], |r| r.get::<_, i64>(0)).optional()?.map(|r| r == 0))
+    Ok(code_status(c, hash)?.map(|s| s.active))
+}
+
+pub struct CodeStatus {
+    pub label: String,
+    pub active: bool,
+    pub observer: bool,
+}
+
+/// None for an unknown code.
+pub fn code_status(c: &Connection, hash: &str) -> Result<Option<CodeStatus>> {
+    Ok(c.query_row("SELECT label, revoked, observer FROM codes WHERE hash = ?1", [hash], |r| {
+        Ok(CodeStatus { label: r.get(0)?, active: r.get::<_, i64>(1)? == 0, observer: r.get::<_, i64>(2)? != 0 })
+    })
+    .optional()?)
 }
 
 pub fn revoke(c: &Connection, code_or_label: &str) -> Result<usize> {
@@ -129,6 +175,22 @@ pub fn add_codes(c: &mut Connection, count: u32, prefix: &str) -> Result<Vec<(St
         let code = new_code();
         let label = format!("{}{:02}", prefix, existing + i + 1);
         add_code(&tx, &code, &label)?;
+        out.push((label, code));
+    }
+    tx.commit()?;
+    Ok(out)
+}
+
+/// `count` new observer codes (`OBS-…`), labelled `<prefix><n>`, n
+/// counting observers only (O01, O02…). Returns (label, code) pairs.
+pub fn add_observer_codes(c: &mut Connection, count: u32, prefix: &str) -> Result<Vec<(String, String)>> {
+    let tx = c.transaction()?;
+    let existing: u32 = tx.query_row("SELECT COUNT(*) FROM codes WHERE observer = 1", [], |r| r.get(0))?;
+    let mut out = Vec::new();
+    for i in 0..count {
+        let code = new_observer_code();
+        let label = format!("{}{:02}", prefix, existing + i + 1);
+        add_observer_code(&tx, &code, &label)?;
         out.push((label, code));
     }
     tx.commit()?;
@@ -175,19 +237,25 @@ pub struct CodeRow {
     pub label: String,
     pub created: String,
     pub revoked: bool,
-    /// epoch -> tokens issued.
+    pub observer: bool,
+    /// Participant: epoch -> tokens issued. Observer: day -> items reported.
     pub epochs: BTreeMap<u32, u32>,
 }
 
 pub fn list_codes(c: &Connection) -> Result<Vec<CodeRow>> {
-    let mut st = c.prepare("SELECT hash, label, created, revoked FROM codes ORDER BY label")?;
-    let rows: Vec<(String, String, String, i64)> =
-        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<_, _>>()?;
+    let mut st = c.prepare("SELECT hash, label, created, revoked, observer FROM codes ORDER BY label")?;
+    let rows: Vec<(String, String, String, i64, i64)> =
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<Result<_, _>>()?;
     let mut out = Vec::new();
-    for (hash, label, created, revoked) in rows {
-        let mut q = c.prepare("SELECT epoch, tokens FROM issuance WHERE hash = ?1")?;
+    for (hash, label, created, revoked, observer) in rows {
+        let q = if observer != 0 {
+            "SELECT day, items FROM observer_days WHERE hash = ?1"
+        } else {
+            "SELECT epoch, tokens FROM issuance WHERE hash = ?1"
+        };
+        let mut q = c.prepare(q)?;
         let epochs = q.query_map([&hash], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, u32>(1)?)))?.collect::<Result<_, _>>()?;
-        out.push(CodeRow { label, created, revoked: revoked != 0, epochs });
+        out.push(CodeRow { label, created, revoked: revoked != 0, observer: observer != 0, epochs });
     }
     Ok(out)
 }
@@ -276,6 +344,56 @@ pub fn count_ballot(c: &mut Connection, epoch: u32, nonce: &[u8], item: &Item) -
     )?;
     tx.commit()?;
     Ok(Spend::Counted)
+}
+
+// ---- dedicated observers ----
+
+/// Counts an observer's report of `day`, once per observer and day.
+/// `items` are distinct and validated. AlreadySpent if that observer
+/// reported that day already.
+pub fn count_observer_report(c: &mut Connection, hash: &str, day: u32, items: &[Item]) -> Result<Spend> {
+    let tx = c.transaction()?;
+    let fresh = tx.execute("INSERT OR IGNORE INTO observer_days(hash, day, items) VALUES(?1, ?2, ?3)", params![hash, day, items.len() as i64])? == 1;
+    if !fresh {
+        return Ok(Spend::AlreadySpent);
+    }
+    {
+        let mut st = tx.prepare(
+            "INSERT INTO observed(day, item, class, n) VALUES(?1, ?2, ?3, 1)
+             ON CONFLICT(day, item) DO UPDATE SET n = n + 1",
+        )?;
+        for item in items {
+            st.execute(params![day, item.key(), item.class().name()])?;
+        }
+    }
+    tx.commit()?;
+    Ok(Spend::Counted)
+}
+
+/// Days with observer reports, most recent first: (day, observers, items).
+pub fn observed_days(c: &Connection) -> Result<Vec<(u32, u32, u32)>> {
+    let mut items: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut st = c.prepare("SELECT day, COUNT(*) FROM observed GROUP BY day")?;
+    for r in st.query_map([], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, u32>(1)?)))? {
+        let (d, n) = r?;
+        items.insert(d, n);
+    }
+    let mut st = c.prepare("SELECT day, COUNT(*) FROM observer_days GROUP BY day ORDER BY day DESC")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, u32>(1)?)))?;
+    let mut out = Vec::new();
+    for r in rows {
+        let (d, observers) = r?;
+        out.push((d, observers, items.get(&d).copied().unwrap_or(0)));
+    }
+    Ok(out)
+}
+
+/// One day: observers that reported, and item key -> observers.
+pub fn observed_day(c: &Connection, day: u32) -> Result<(u32, BTreeMap<String, u32>)> {
+    let observers: u32 = c.query_row("SELECT COUNT(*) FROM observer_days WHERE day = ?1", [day], |r| r.get(0))?;
+    let mut st = c.prepare("SELECT item, n FROM observed WHERE day = ?1")?;
+    let items = st.query_map([day], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?.collect::<Result<_, _>>()?;
+    Ok((observers, items))
 }
 
 /// Per epoch before `until`: item key -> count (presence ballots left out).

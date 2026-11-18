@@ -10,13 +10,17 @@
 //! average out, and per-item, per-week privacy budgets add up over a
 //! report and over weeks. Differential privacy is future work
 //! (docs/privacy.md).
+//!
+//! Dedicated observers' items are released apart, day by day, as soon as
+//! they are counted, and without threshold: an observer is a machine run
+//! for the study, whose traffic is meant to be published.
 
 use std::collections::BTreeMap;
 
 use anyhow::Result;
 use rusqlite::Connection;
 
-use peersig_proto::wire::{Released, ReleasedItem};
+use peersig_proto::wire::{ObservedDay, ObservedItem, Released, ReleasedItem};
 use peersig_proto::Item;
 
 use crate::db;
@@ -44,4 +48,12 @@ pub fn released(c: &Connection, s: &Settings, until: u32) -> Result<Released> {
         }
     }
     Ok(Released { until_epoch: until, k_hello: s.k_hello, k_domain: s.k_domain, items })
+}
+
+/// One day of the observers' table.
+pub fn observed(c: &Connection, s: &Settings, day: u32) -> Result<ObservedDay> {
+    let (observers, counts) = db::observed_day(c, day)?;
+    let items = counts.into_iter().filter_map(|(key, n)| Some(ObservedItem { item: Item::from_key(&key)?, observers: n })).collect();
+    let name = chrono::DateTime::from_timestamp(s.epochs.days().start(day), 0).map(|t| t.date_naive().to_string()).unwrap_or_default();
+    Ok(ObservedDay { day: name, observers, items })
 }

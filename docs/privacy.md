@@ -18,6 +18,9 @@ are.
   a commercial OHTTP relay). Forwards encrypted requests.
 - For enrollment from the web page, the **mail system** that delivers the
   code, or **GitHub** if the participant signs in with it.
+- **Dedicated observers**: machines run for the study, with an observer
+  code from the study team. They are not participants and do not get the
+  protections below: see [Dedicated observers](#dedicated-observers).
 
 ## What leaves the computer
 
@@ -151,6 +154,30 @@ weeks in a row cannot be told from three participants, so this is a lower
 bound on distinct participants. An item is released only once its support
 reaches *k* (3 for hello items, 5 for domains), with that support.
 
+## Dedicated observers
+
+An observer code (`OBS-…`, made only with `codes add --observer` on the
+server) turns a machine into a dedicated observer
+([observers.md](observers.md)). Its items are the same as a participant's,
+but:
+
+- each day's items go in **one report, with the code**, straight to the
+  server: the server knows which observer sent which items. It keeps one
+  counter per (day, item) and which observer reported which day, not the
+  reports;
+- each day is **published without threshold**, with the number of
+  observers that reported each item;
+- the app joins as an observer only with such a code, says so before
+  joining, and has no review by default.
+
+Observers are kept apart from participants: an observer code gets no
+ballot tokens, a participant's code cannot send an observer report, and
+observer counts never enter the participants' counts. So observers
+cannot push a participant's rare item over *k*, nor make its support say
+more than the participants' ballots do. Use observer codes only on
+machines whose traffic may be published, never on someone's own
+computer.
+
 ## What each party learns
 
 | | Server | Relay | Someone with the database file |
@@ -161,6 +188,7 @@ reaches *k* (3 for hello items, 5 for domains), with that support.
 | Which items a participant has | no | no | no |
 | Which ballots come from one person | no (see limits) | no | no |
 | Per-week item counts | yes | no | yes |
+| An observer's items, per day | yes (published) | no | yes (counts) |
 
 ## Limits
 

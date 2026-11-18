@@ -78,7 +78,7 @@ pub(crate) fn layout(title: &str, description: &str, active: &str, body: &str, s
 </main>
 <footer><div class="in">
   <span>PeerSig, a study of the <a href="https://github.com/UCLouvain-ENSG">Efficiency of Networked Systems Group</a>, UCLouvain. Apache-2.0.</span>
-  <span><a href="{SOURCE}/blob/main/docs/privacy.md">Privacy design</a> · <a href="/v1/released">Published table</a> · <a href="{SOURCE}">Source code</a></span>
+  <span><a href="{SOURCE}/blob/main/docs/privacy.md">Privacy design</a> · <a href="/v1/released">Published table</a> · <a href="/v1/released/observers">Observers' daily table</a> · <a href="{SOURCE}">Source code</a></span>
 </div></footer>
 </body>
 </html>"#,

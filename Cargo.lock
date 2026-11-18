@@ -3763,6 +3763,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "peersig-observer"
+version = "0.1.4"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "clap",
+ "peersig-proto",
+ "peersig-server",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "peersig-probe"
 version = "0.1.4"
 dependencies = [

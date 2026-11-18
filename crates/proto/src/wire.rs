@@ -1,7 +1,8 @@
 //! API messages. `GET /v1/config` and `POST /v1/ballot` go through
 //! Oblivious HTTP (`POST /ohttp`); only
 //! `POST /v1/issue`, which is authenticated by the enrollment code anyway,
-//! goes directly to the server.
+//! goes directly to the server. So does `POST /v1/observe`: a dedicated
+//! observer's daily report, which is not anonymous.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,14 @@ pub const PATH_BALLOT: &str = "/v1/ballot";
 pub const PATH_RELEASED: &str = "/v1/released";
 pub const PATH_OHTTP: &str = "/ohttp";
 pub const PATH_OHTTP_KEYS: &str = "/ohttp-keys";
+pub const PATH_OBSERVE: &str = "/v1/observe";
+/// The observers' daily table: the list of days, and `/<YYYY-MM-DD>` for one.
+pub const PATH_OBSERVED: &str = "/v1/released/observers";
+
+/// Days back an observer may still report (its logs are kept 14 days).
+pub const OBSERVER_LATE_DAYS: u32 = 7;
+/// Items in one observer report, at most.
+pub const OBSERVER_MAX_ITEMS: usize = 10_000;
 
 /// The key that signs the tokens of one epoch.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -84,4 +93,55 @@ pub struct ReleasedItem {
     pub item: Item,
     /// Largest per-epoch count.
     pub support: i64,
+}
+
+/// A dedicated observer's report: every item it saw on one day (UTC), in
+/// one request authenticated by its code. Not a ballot: the server knows
+/// which observer sends it, and publishes the day's items without
+/// threshold.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ObserverReport {
+    pub code: String,
+    /// Day number from the collection's origin (`EpochSpec::days`).
+    pub day: u32,
+    pub items: Vec<Item>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ObserverReceipt {
+    /// The observer's label on the server (`O01`).
+    pub label: String,
+    pub day: u32,
+    /// Distinct items counted.
+    pub items: usize,
+}
+
+/// One day of the observers' table: every item any observer reported,
+/// with how many reported it. No threshold.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ObservedDay {
+    /// YYYY-MM-DD, UTC.
+    pub day: String,
+    /// Observers that reported this day.
+    pub observers: u32,
+    pub items: Vec<ObservedItem>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ObservedItem {
+    pub item: Item,
+    pub observers: u32,
+}
+
+/// The days of the observers' table, most recent first.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ObservedDays {
+    pub days: Vec<ObservedDaySummary>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ObservedDaySummary {
+    pub day: String,
+    pub observers: u32,
+    pub items: u32,
 }
