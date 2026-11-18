@@ -198,6 +198,12 @@ section { padding: 4.5rem 0 1rem; }
 .fp .why b { color: var(--fg); }
 .part-a { color: var(--accent); } .part-b { color: var(--accent-2); } .part-c { color: var(--warm); }
 .hl { background: color-mix(in srgb, var(--accent) 16%, transparent); outline: 1.5px solid color-mix(in srgb, var(--accent) 60%, transparent); }
+.pick { cursor: pointer; transition: background .15s; }
+.hello div.f.pick:hover:not(.hl) { background: var(--accent-soft); }
+.fp .string span.pick:hover:not(.hl) { background: var(--accent-soft); }
+.pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.steps-ja4 i { cursor: pointer; }
+.ja4-hint { margin: 0; text-align: center; font-size: .82rem; color: var(--muted); }
 .steps-ja4 { display: flex; gap: .4rem; flex-wrap: wrap; justify-content: center; }
 .steps-ja4 i { width: .5rem; height: .5rem; border-radius: 50%; background: var(--line); }
 .steps-ja4 i.on { background: var(--accent); }
@@ -225,6 +231,11 @@ section { padding: 4.5rem 0 1rem; }
 .others a { margin-right: .9rem; white-space: nowrap; }
 .tip { margin-top: .9rem; padding: .8rem 1rem; border-radius: 12px; background: var(--bg-soft); border: 1px solid var(--line); font-size: .9rem; color: var(--muted); }
 .tip b { color: var(--fg); }
+.tip.warn { display: flex; gap: .8rem; align-items: flex-start; color: var(--fg);
+  border-color: color-mix(in srgb, var(--warm) 55%, var(--line)); background: color-mix(in srgb, var(--warm) 9%, var(--bg)); }
+.tip.warn svg { flex: none; width: 1.4rem; height: 1.4rem; color: var(--warm); margin-top: .1rem; }
+/* After `display: flex`, which would show a hidden tip. */
+.tip[hidden] { display: none; }
 .methods { display: grid; grid-template-columns: repeat(auto-fit, minmax(14.5rem, 1fr)); gap: .9rem; margin-top: 1rem; }
 .method { border: 1px solid var(--line); border-radius: var(--radius); padding: 1.1rem 1.2rem; background: var(--bg-soft); display: flex; flex-direction: column; gap: .7rem; }
 .method p { margin: 0; font-size: .87rem; color: var(--muted); }

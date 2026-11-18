@@ -129,12 +129,15 @@ function captureCard() {
   const body = [];
   if (!state.probe_installed) {
     body.push(el("div", { class: "big bad" }, "Not installed"));
-    body.push(el("p", { class: "muted" }, "The capture service needs to be installed once. Your computer will ask for an administrator password."));
+    body.push(el("p", { class: "muted" }, state.os === "windows"
+      ? "The capture service needs to be installed once. Windows will ask for an administrator's permission."
+      : "The capture service needs to be installed once. Your computer will ask for an administrator password."));
     body.push(el("div", { class: "row" }, el("button", { class: "btn primary", onclick: async () => { await call("install_probe"); refresh(); } }, "Install capture service")));
     return el("div", { class: "card" }, el("h2", {}, "Capture"), ...body);
   }
   if (state.paused) body.push(el("div", { class: "big warn" }, "Paused"), el("p", { class: "muted" }, "The capture device is closed: nothing is being looked at."));
   else if (p.running) body.push(el("div", { class: "big ok" }, "Capturing"));
+  else if (p.error) body.push(el("div", { class: "big bad" }, "Cannot capture"), el("p", { class: "muted" }, p.error, el("br"), "The service tries again every 30 seconds."));
   else body.push(el("div", { class: "big bad" }, "Not running"), el("p", { class: "muted" }, "The service is installed but has not reported in the last 30 seconds."));
   body.push(el("p", {}, `${p.hellos.toLocaleString()} handshakes seen since ${iso(p.started)}`, el("br"), el("span", { class: "muted small" }, `Last: ${iso(p.last_hello)}`)));
   if (p.running && !p.pktap && state.os === "macos")
@@ -316,7 +319,7 @@ function renderSettings() {
       el("p", { class: "muted small" }, "Local logs: ", el("span", { class: "mono" }, s.logs_dir)),
       el("div", { class: "row" },
         el("button", { class: "btn", onclick: () => call("open_logs") }, "Open logs"),
-        state.os === "macos" && state.probe_installed ? el("button", { class: "btn", onclick: async () => { await call("uninstall_probe"); refresh(); } }, "Remove capture service") : null)),
+        (state.os === "macos" || state.os === "windows") && state.probe_installed ? el("button", { class: "btn", onclick: async () => { await call("uninstall_probe"); refresh(); } }, "Remove capture service") : null)),
     el("div", { class: "card" },
       el("h2", {}, "Leave"),
       el("label", { class: "check" }, del, el("span", {}, "Also delete the local logs")),

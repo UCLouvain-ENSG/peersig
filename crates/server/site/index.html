@@ -134,7 +134,7 @@
   <p class="lead">Every encrypted connection starts with a ClientHello: the client lists what it supports, in clear. <a href="https://github.com/FoxIO-LLC/ja4/blob/main/technical_details/JA4.md">JA4</a> condenses it into three parts. The same TLS library, set up the same way, always gives the same JA4.</p>
   <div class="ja4" id="ja4demo">
     <div class="hello">
-      <div class="hd">ClientHello, from Microsoft Teams</div>
+      <div class="hd">ClientHello, from Microsoft Teams · click a field</div>
       <div class="f" data-f="t"><span>Transport</span><span>TCP</span></div>
       <div class="f" data-f="v"><span>Highest version</span><span>TLS 1.3</span></div>
       <div class="f" data-f="sni"><span>Server name (SNI)</span><span>teams.microsoft.com</span></div>
@@ -147,6 +147,7 @@
       <div class="string"><span class="part-a"><span data-p="t">t</span><span data-p="v">13</span><span data-p="sni">d</span><span data-p="cs">15</span><span data-p="ext">16</span><span data-p="alpn">h2</span></span>_<span class="part-b" data-p="b">8daaf6152771</span>_<span class="part-c" data-p="c">806a8c22fdea</span></div>
       <p class="why" id="ja4why"><b>JA4</b>: read the ClientHello on the left, step by step.</p>
       <div class="steps-ja4" id="ja4steps"></div>
+      <p class="ja4-hint">Click a field of the ClientHello, a part of the JA4, or a dot.</p>
     </div>
   </div>
 

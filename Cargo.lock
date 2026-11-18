@@ -3744,10 +3744,11 @@ dependencies = [
 
 [[package]]
 name = "peersig-app"
-version = "0.1.1"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.23.1",
  "chrono",
  "peersig-proto",
  "peersig-server",
@@ -3763,7 +3764,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-probe"
-version = "0.1.1"
+version = "0.1.4"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -3782,11 +3783,12 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "toml 0.8.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "peersig-proto"
-version = "0.1.1"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3804,7 +3806,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-relay"
-version = "0.1.1"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -3820,7 +3822,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-server"
-version = "0.1.1"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "axum",

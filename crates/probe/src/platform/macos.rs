@@ -23,7 +23,7 @@ pub fn basic(pid: i32) -> Option<PidBasic> {
     let comm = unsafe { CStr::from_ptr(info.pbi_comm.as_ptr()) }.to_string_lossy().into_owned();
     Some(PidBasic {
         ppid: info.pbi_ppid as i32,
-        uid: info.pbi_uid,
+        uid: Some(info.pbi_uid),
         start_us: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
         name: if name.is_empty() { comm } else { name },
     })

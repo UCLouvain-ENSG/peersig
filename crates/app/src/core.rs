@@ -31,6 +31,13 @@ pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+/// "Mon 23 Nov", local time.
+pub fn day(t: i64) -> String {
+    chrono::DateTime::from_timestamp(t, 0)
+        .map(|d| d.with_timezone(&chrono::Local).format("%a %-d %b").to_string())
+        .unwrap_or_default()
+}
+
 /// The study's collection server and relay, filled in on the join screen.
 /// Participants enrolled elsewhere keep the addresses they joined with.
 pub const DEFAULT_SERVER: &str = "https://peersig.org";
@@ -140,8 +147,9 @@ pub struct Core {
     pub last_error: Option<String>,
     pub probe: ProbeStatus,
     pub cache: local::Cache,
-    /// Ask the worker to send the current report now.
-    pub send_now: bool,
+    /// The report (epoch) whose review the participant asked to skip. Only
+    /// that one: a click never carries over to a later week's review.
+    pub send_now: Option<u32>,
 }
 
 /// What the window shows.
@@ -169,7 +177,7 @@ impl Core {
             p.settings.server = DEFAULT_SERVER.into();
             p.settings.relay = DEFAULT_RELAY.into();
         }
-        Core { path, p, config: None, last_error: None, probe: ProbeStatus::default(), cache: local::Cache::default(), send_now: false }
+        Core { path, p, config: None, last_error: None, probe: ProbeStatus::default(), cache: local::Cache::default(), send_now: None }
     }
 
     pub fn save(&self) -> Result<()> {
@@ -265,7 +273,36 @@ impl Core {
     /// The report whose review is over (or was skipped with "send now").
     pub fn due_for_preparation(&self) -> Option<u32> {
         let r = self.current_report()?;
-        (r.state == ReportState::Review && (self.send_now || now() >= r.review_until)).then_some(r.epoch)
+        (r.state == ReportState::Review && (self.send_now == Some(r.epoch) || now() >= r.review_until)).then_some(r.epoch)
+    }
+
+    /// "Send now": skips the review of the report under review. When there
+    /// is none, says why nothing can be sent.
+    pub fn request_send(&mut self) -> Result<u32, String> {
+        if !self.p.settings.enrolled() {
+            return Err("Join the study first.".into());
+        }
+        let Some((_, cfg)) = &self.config else {
+            return Err("PeerSig has not reached the server yet; try again in a minute.".into());
+        };
+        let next = day(cfg.epochs.end(cfg.current_epoch));
+        match self.current_report() {
+            Some(r) if r.state == ReportState::Review => {
+                let e = r.epoch;
+                self.send_now = Some(e);
+                Ok(e)
+            }
+            Some(r) if r.state == ReportState::Sending => Err(format!("The report is being sent: {} of {} ballots so far.", r.sent, r.total)),
+            Some(r) if r.state == ReportState::Sent => {
+                Err(format!("The report for the week of {} was sent. This week's can be sent from {}.", day(r.from), next))
+            }
+            Some(r) => Err(format!("The report for the week of {} could not be sent: {}", day(r.from), r.error.clone().unwrap_or_default())),
+            None if cfg.report_epoch >= cfg.current_epoch => Err(format!(
+                "Nothing to send yet: a week is reported once it is over. The first report covers this week; it can be sent from {}.",
+                next
+            )),
+            None => Err("The report is being prepared; try again in a minute.".into()),
+        }
     }
 
     /// Next ballot to send, if its time has come.
@@ -364,6 +401,44 @@ mod tests {
     use peersig_proto::EpochSpec;
     use peersig_server::{api, db, system_clock, State};
     use std::io::Write;
+
+    /// "Send now" skips the review of the report under review, and only of
+    /// that one; with nothing to send, it says why and arms nothing.
+    #[test]
+    fn send_now_applies_to_one_report() {
+        let tmp = std::env::temp_dir().join(format!("peersig-send-now-{}", std::process::id()));
+        let mut core = Core::load(&tmp);
+        core.p.settings.code = "K7QF-2M9D-XW4P".into();
+        core.p.settings.consented = Some("now".into());
+        let t = now();
+        let cfg = |cur: u32| Config {
+            server_version: "test".into(),
+            epochs: EpochSpec { origin: t - cur as i64 * EpochSpec::WEEK - 3600, length: EpochSpec::WEEK },
+            current_epoch: cur,
+            report_epoch: cur.saturating_sub(1),
+            token_key: peersig_proto::wire::TokenKey { epoch: 0, public_key: vec![], key_id: "k".into() },
+            tokens_per_epoch: 1,
+            k_hello: 3,
+            k_domain: 5,
+            about_url: None,
+        };
+        // First week of the collection: nothing to report yet.
+        core.config = Some((t, cfg(0)));
+        let why = core.request_send().unwrap_err();
+        assert!(why.contains("Nothing to send yet"), "{}", why);
+        assert_eq!(core.send_now, None);
+        // A report under review is sent when asked.
+        core.config = Some((t, cfg(1)));
+        assert!(core.open_report());
+        assert_eq!(core.due_for_preparation(), None, "under review");
+        assert_eq!(core.request_send(), Ok(0));
+        assert_eq!(core.due_for_preparation(), Some(0));
+        // The next week's report keeps its review.
+        core.p.reports.get_mut(&0).unwrap().state = ReportState::Sent;
+        core.config = Some((t, cfg(2)));
+        assert!(core.open_report());
+        assert_eq!(core.due_for_preparation(), None, "a click last week must not skip this review");
+    }
 
     /// A week of logs, reviewed, prepared, sent: what reaches the server.
     #[tokio::test(flavor = "multi_thread")]

@@ -26,7 +26,7 @@ pub fn basic(pid: i32) -> Option<PidBasic> {
         .find_map(|l| l.strip_prefix("Uid:").and_then(|v| v.split_whitespace().next()?.parse().ok()))?;
     Some(PidBasic {
         ppid,
-        uid,
+        uid: Some(uid),
         start_us: btime * 1_000_000 + start_ticks * 1_000_000 / ticks,
         name,
     })

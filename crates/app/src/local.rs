@@ -25,6 +25,8 @@ pub struct ProbeStatus {
     pub started: Option<String>,
     pub tool: Option<String>,
     pub file: Option<String>,
+    /// Why the probe cannot capture yet (it retries meanwhile).
+    pub error: Option<String>,
 }
 
 pub fn status(dir: &Path) -> ProbeStatus {
@@ -38,8 +40,10 @@ pub fn status(dir: &Path) -> ProbeStatus {
         .is_some_and(|d| d.as_secs() < 30);
     let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
     let hellos = v.get("hellos").map(|h| ["tcp", "quic", "dtls"].iter().filter_map(|k| h.get(*k)?.as_u64()).sum()).unwrap_or(0);
+    let error = if fresh { s("error") } else { None };
     ProbeStatus {
-        running: fresh && v.get("stopped").is_none(),
+        running: fresh && v.get("stopped").is_none() && error.is_none(),
+        error,
         paused: v.get("paused").and_then(|x| x.as_bool()).unwrap_or(false),
         pktap: v.get("pktap").and_then(|x| x.as_bool()).unwrap_or(false),
         packets: v.get("packets").and_then(|x| x.as_u64()).unwrap_or(0),

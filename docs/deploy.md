@@ -151,8 +151,10 @@ The released list is also public at `/v1/released`.
 
 Pushing a tag `v<version>` runs `.github/workflows/release.yml`:
 
-- the macOS app (Apple Silicon and Intel: `.dmg`) and the Linux app (`.deb`,
-  `.AppImage`), each with the probe inside;
+- the macOS app (Apple Silicon and Intel: `.dmg`), the Linux app (`.deb`,
+  `.rpm`, `.AppImage`) and the Windows app (`.msi`, x64), each with the
+  probe inside (on Windows it uses the system's packet capture: nothing
+  else to install);
 - `peersig-server`, `peersig-relay` and `peersig-probe` for Linux x86_64;
 - `SHA256SUMS`.
 
@@ -170,6 +172,33 @@ and notarize, add the repository secrets `APPLE_CERTIFICATE` (base64 .p12),
 them to the Tauri bundler when they are set; `APPLE_SIGNING_IDENTITY`
 overrides the ad-hoc identity.
 
-On Linux, install the `.deb`: its post-install script gives the probe the
-capture capabilities it needs. The AppImage cannot carry capabilities; the
-app then asks for them through `pkexec`, which fails on the read-only image.
+On Linux, install the `.deb` or the `.rpm`: their post-install script gives
+the probe the capture capabilities it needs. The AppImage cannot carry
+capabilities; the app then asks for them through `pkexec`, which fails on
+the read-only image. Both packages are built on Ubuntu; the `.rpm`'s probe
+is patched to load `libpcap.so.1`, the name Fedora, RHEL and openSUSE give
+the library Debian calls `libpcap.so.0.8`.
+
+### Downloads on the site
+
+The site's `/participate` page links to `/download/<file>` and reads
+`/download/latest.json` to offer each visitor the package for their system
+(a package missing from that file is not offered). `peersig-server` does
+not serve that directory: the web server in front of it does. With Apache,
+before the `ProxyPass /` line:
+
+```apache
+    Alias /download /var/www/peersig/download
+    ProxyPass /download !
+```
+
+Once a release is published on GitHub, fill the directory from it:
+
+```sh
+scripts/mirror_release.py /var/www/peersig/download          # or --tag v0.1.3
+```
+
+It downloads the packages, checks them against the release's `SHA256SUMS`,
+gives each a stable name (`PeerSig-windows-x64.msi`) and replaces
+`latest.json` last. New packages or page text also need the new
+`peersig-server`: the pages are compiled in.

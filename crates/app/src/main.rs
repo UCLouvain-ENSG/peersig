@@ -20,7 +20,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::{Mutex, Notify};
 
-use crate::core::{now, Core, ReportState};
+use crate::core::{day, now, Core, ReportState};
 
 type Shared = Arc<Mutex<Core>>;
 struct Wake(Arc<Notify>);
@@ -28,6 +28,7 @@ struct Wake(Arc<Notify>);
 struct Tray {
     status: MenuItem<Wry>,
     report: MenuItem<Wry>,
+    send: MenuItem<Wry>,
     pause: CheckMenuItem<Wry>,
 }
 
@@ -37,12 +38,6 @@ struct Child(std::sync::Mutex<Option<std::process::Child>>);
 const ICON_IDLE: &[u8] = include_bytes!("../icons/tray.png");
 const ICON_SENDING: &[u8] = include_bytes!("../icons/tray-sending.png");
 const ICON_PAUSED: &[u8] = include_bytes!("../icons/tray-paused.png");
-
-fn day(t: i64) -> String {
-    chrono::DateTime::from_timestamp(t, 0)
-        .map(|d| d.with_timezone(&chrono::Local).format("%a %-d %b").to_string())
-        .unwrap_or_default()
-}
 
 fn notify(app: &AppHandle, body: &str) {
     let _ = app.notification().builder().title("PeerSig").body(body).show();
@@ -160,7 +155,7 @@ async fn save_settings(
 
 #[tauri::command]
 async fn send_now(core: State<'_, Shared>, wake: State<'_, Wake>) -> R<()> {
-    core.lock().await.send_now = true;
+    core.lock().await.request_send()?;
     wake.0.notify_one();
     Ok(())
 }
@@ -262,8 +257,12 @@ fn update_tray(app: &AppHandle, v: &core::View) {
         Some(r) if r.state == ReportState::Sending => format!("Sending week of {}: {}/{}", day(r.from), r.sent, r.total),
         Some(r) if r.state == ReportState::Sent => format!("Week of {} sent", day(r.from)),
         Some(r) => format!("Week of {}: not sent", day(r.from)),
-        None => "Nothing to send yet".to_string(),
+        None => match &v.config {
+            Some(c) if c.report_epoch >= c.current_epoch => format!("First report: from {}", day(c.epochs.end(c.current_epoch))),
+            _ => "Nothing to send yet".to_string(),
+        },
     };
+    let in_review = v.current.as_ref().filter(|r| r.state == ReportState::Review);
     let sending = v.reports.iter().any(|r| r.state == ReportState::Sending);
     let icon = if sending {
         ICON_SENDING
@@ -276,6 +275,11 @@ fn update_tray(app: &AppHandle, v: &core::View) {
         let _ = t.status.set_text(&status);
         let _ = t.report.set_text(&report);
         let _ = t.pause.set_checked(v.paused);
+        let _ = t.send.set_enabled(in_review.is_some());
+        let _ = t.send.set_text(match in_review {
+            Some(r) => format!("Send the week of {} now", day(r.from)),
+            None => "Send the report now".to_string(),
+        });
     }
     if let Ok(img) = Image::from_bytes(icon) {
         let _ = tray.set_icon(Some(img));
@@ -290,7 +294,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let report = MenuItem::with_id(app, "report", "Nothing to send yet", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open PeerSig…", true, None::<&str>)?;
     let pause = CheckMenuItem::with_id(app, "pause", "Pause capture", true, false, None::<&str>)?;
-    let send = MenuItem::with_id(app, "send", "Send this week's report now", true, None::<&str>)?;
+    let send = MenuItem::with_id(app, "send", "Send the report now", false, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit PeerSig", true, None::<&str>)?;
     let sep = || PredefinedMenuItem::separator(app);
     let menu = Menu::with_items(app, &[&status, &report, &sep()?, &open, &pause, &send, &sep()?, &quit])?;
@@ -319,16 +323,21 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
                 "send" => {
                     tauri::async_runtime::spawn(async move {
-                        app.state::<Shared>().lock().await.send_now = true;
-                        app.state::<Wake>().0.notify_one();
-                        show_window(&app);
+                        let r = app.state::<Shared>().lock().await.request_send();
+                        match r {
+                            Ok(_) => {
+                                app.state::<Wake>().0.notify_one();
+                                show_window(&app);
+                            }
+                            Err(why) => notify(&app, &why),
+                        }
                     });
                 }
                 _ => {}
             }
         })
         .build(app)?;
-    app.manage(Tray { status, report, pause });
+    app.manage(Tray { status, report, send, pause });
     Ok(())
 }
 
@@ -400,10 +409,10 @@ async fn tick(app: &AppHandle, core: &Shared) {
         match r {
             Ok(p) => {
                 let window = c.p.reports.get(&e).map(|r| r.send_by - now() - 600).unwrap_or(0).max(60);
-                let spread = if c.send_now { 300 } else { settings.spread_minutes as i64 * 60 }.min(window);
+                let spread = if c.send_now == Some(e) { 300 } else { settings.spread_minutes as i64 * 60 }.min(window);
                 let real_n = p.real.len();
                 core::schedule(&mut c, e, p, spread);
-                c.send_now = false;
+                c.send_now = None;
                 let _ = c.save();
                 notify(
                     app,
@@ -416,7 +425,7 @@ async fn tick(app: &AppHandle, core: &Shared) {
             }
             Err(err) => {
                 let msg = format!("{:#}", err);
-                c.send_now = false;
+                c.send_now = None;
                 if let Some(r) = c.p.reports.get_mut(&e) {
                     if msg.contains("(403)") || msg.contains("(429)") {
                         r.state = ReportState::Failed;

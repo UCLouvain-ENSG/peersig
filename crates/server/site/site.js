@@ -22,12 +22,27 @@
       ["t v sni cs ext alpn b c", "Same TLS library, same settings: same JA4. It names software, never people. Which software, a JA4 alone does not say: that is what PeerSig adds."]
     ];
     var why = document.getElementById("ja4why"), dots = document.getElementById("ja4steps");
-    var step = 0, paused = false;
+    var step = 0, hover = false, holdUntil = 0;
+    // A click (or Enter) shows that step and holds the slideshow a while.
+    var pick = function (i) { show(i); holdUntil = Date.now() + 20000; };
     STEPS.forEach(function (s, i) {
       var d = document.createElement("i");
       d.title = "Step " + (i + 1);
-      d.addEventListener("click", function () { show(i); paused = true; });
+      d.addEventListener("click", function () { pick(i); });
       dots.appendChild(d);
+    });
+    // Every ClientHello field and every part of the JA4 leads to its step.
+    demo.querySelectorAll("[data-f],[data-p]").forEach(function (e) {
+      var n = e.getAttribute("data-f") || e.getAttribute("data-p");
+      var i = STEPS.findIndex(function (s) { return s[0].split(" ").indexOf(n) >= 0; });
+      if (i < 0) return;
+      e.setAttribute("role", "button");
+      e.setAttribute("tabindex", "0");
+      e.classList.add("pick");
+      e.addEventListener("click", function () { pick(i); });
+      e.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(i); }
+      });
     });
     function show(i) {
       step = i;
@@ -40,10 +55,12 @@
       Array.prototype.forEach.call(dots.children, function (d, j) { d.classList.toggle("on", j === i); });
     }
     show(0);
-    demo.addEventListener("mouseenter", function () { paused = true; });
-    demo.addEventListener("mouseleave", function () { paused = false; });
+    demo.addEventListener("mouseenter", function () { hover = true; });
+    demo.addEventListener("mouseleave", function () { hover = false; });
     if (!reduced) {
-      setInterval(function () { if (!paused && !document.hidden) show((step + 1) % STEPS.length); }, 3200);
+      setInterval(function () {
+        if (!hover && !document.hidden && Date.now() > holdUntil) show((step + 1) % STEPS.length);
+      }, 3200);
     }
   }
 
@@ -53,7 +70,9 @@
     var KINDS = {
       "macos-arm64": { label: "Download for macOS", meta: "Apple Silicon (M1 and newer) · macOS 12 or newer", tip: "dl-tip-mac" },
       "macos-x64": { label: "Download for macOS (Intel)", meta: "Intel Macs · macOS 12 or newer", tip: "dl-tip-mac" },
+      "windows-x64": { label: "Download for Windows", meta: "Windows 10 and 11 · x64", tip: "dl-tip-windows" },
       "linux-deb": { label: "Download for Linux (.deb)", meta: "Debian, Ubuntu and derivatives · x86_64", tip: "dl-tip-linux" },
+      "linux-rpm": { label: "Download for Linux (.rpm)", meta: "Fedora, RHEL, openSUSE · x86_64", tip: "dl-tip-linux" },
       "linux-appimage": { label: "Download for Linux (AppImage)", meta: "x86_64", tip: "dl-tip-linux" }
     };
     var detect = function () {
@@ -68,8 +87,9 @@
         }
         return Promise.resolve(gpuMac());
       }
-      if (/linux/i.test(plat) || /Linux/.test(ua)) return Promise.resolve("linux-deb");
-      if (/win/i.test(plat) || /Windows/.test(ua)) return Promise.resolve("windows");
+      // Firefox names the distribution; otherwise the .deb, the common case.
+      if (/linux/i.test(plat) || /Linux/.test(ua)) return Promise.resolve(/Fedora|Red Hat|CentOS|SUSE/i.test(ua) ? "linux-rpm" : "linux-deb");
+      if (/win/i.test(plat) || /Windows/.test(ua)) return Promise.resolve("windows-x64");
       return Promise.resolve("other");
     };
     // Safari and Firefox do not say which Mac: Intel Macs have Intel or AMD GPUs.
@@ -89,21 +109,26 @@
     Promise.all([detect(), latest]).then(function (v) {
       var kind = v[0], rel = v[1];
       var file = function (k) { return rel && rel.files && rel.files[k]; };
-      // Versioned names when the release list is known.
+      // Versioned names when the release list is known; a package that is
+      // not in it (not published here yet) is not offered.
       document.querySelectorAll("a[data-kind]").forEach(function (a) {
         var f = file(a.getAttribute("data-kind"));
         if (f) a.href = "/download/" + f.name;
+        else if (rel) a.hidden = true;
       });
       var meta = document.getElementById("dl-meta");
       var k = KINDS[kind];
-      if (!k) {
-        label.textContent = kind === "mobile" ? "PeerSig runs on a computer" : "PeerSig runs on macOS and Linux";
+      var tips = function (shown) {
+        document.querySelectorAll("[id^='dl-tip-']").forEach(function (t) { t.hidden = t.id !== shown; });
+      };
+      if (!k || (rel && !file(kind))) {
+        label.textContent = kind === "mobile" ? "PeerSig runs on a computer" : "PeerSig runs on macOS, Windows and Linux";
         main.removeAttribute("href");
         main.classList.remove("grad-bg");
         var icon = main.querySelector("svg");
         if (icon) icon.remove();
-        ["dl-tip-mac", "dl-tip-linux"].forEach(function (id) { var t = document.getElementById(id); if (t) t.hidden = true; });
-        meta.textContent = kind === "mobile" ? "Open this page on a Mac or a Linux PC." : "Windows is not supported yet.";
+        tips(null);
+        meta.textContent = kind === "mobile" ? "Open this page on a Mac or a PC." : k ? "The package for this system is not published yet." : "Pick your system below.";
         return;
       }
       label.textContent = k.label;
@@ -111,10 +136,7 @@
       if (f) main.href = "/download/" + f.name;
       else main.href = document.querySelector('a[data-kind="' + kind + '"]').href;
       meta.textContent = k.meta + (rel ? " · version " + rel.version : "") + (f && f.size ? " · " + mb(f.size) : "");
-      ["dl-tip-mac", "dl-tip-linux"].forEach(function (id) {
-        var t = document.getElementById(id);
-        if (t) t.hidden = id !== k.tip;
-      });
+      tips(k.tip);
     });
   }
 })();

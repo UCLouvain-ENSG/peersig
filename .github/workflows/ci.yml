@@ -50,10 +50,16 @@ jobs:
       - run: node --check crates/app/ui/app.js
 
   windows:
-    name: Protocol, server, relay (windows)
+    name: Probe, protocol, server, relay, app (windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked -p peersig-proto -p peersig-server -p peersig-relay
+      - run: cargo test --locked
+      - name: Probe sidecar
+        shell: bash
+        run: |
+          cargo build --locked --release -p peersig-probe
+          cp target/release/peersig-probe.exe crates/app/binaries/peersig-probe-$(rustc -vV | sed -n 's/host: //p').exe
+      - run: cargo test --locked -p peersig-app

@@ -9,8 +9,9 @@ are.
 
 ## Parties
 
-- **Participant**: runs the probe (capture, root on macOS) and the app (user
-  level, the only part that uses the network).
+- **Participant**: runs the probe (capture, root on macOS, a LocalSystem
+  service on Windows) and the app (user level, the only part that uses the
+  network).
 - **Server**: run by the study. Enrolls participants, issues tokens, counts
   ballots, publishes results.
 - **Relay**: run by someone else (another lab, the data protection officer,
@@ -22,7 +23,7 @@ are.
 
 Items (`crates/proto/src/item.rs`), at most once per item and week:
 
-- `hello`: OS family and major version (`macos 27`), transport (tcp, quic,
+- `hello`: OS family and major version (`macos 27`, `windows 11`), transport (tcp, quic,
   dtls), JA4, the JA4 Iris stored before its fix (`ja4_legacy`), and the
   application: name, bundle id, version, code-signing team, kind (browser,
   app, system, cli), engine.
@@ -168,7 +169,14 @@ reaches *k* (3 for hello items, 5 for domains), with that support.
   arbitrary items. Thresholds limit the effect on what is released.
 - **Local logs.** The probe's logs hold server names and addresses. They
   stay on the computer, readable by the participant only, and are deleted
-  after 14 days.
+  after 14 days. On Windows they are in `%ProgramData%\PeerSig\logs`,
+  readable by the participant and by the computer's administrators (as
+  root can read them on macOS).
+- **Windows app names.** Windows has no bundle ids: an application is
+  named by its executable's version resource (product name and version),
+  an MSIX app by its package, a Windows service host by its service name.
+  These are the same fields as on macOS (`name`, `id`, `version`, `kind`,
+  `engine`); `team_id` stays empty.
 - **No noise.** Released supports are exact counts, and nothing hides
   whether a ballot is real: the protection is that ballots are unlinkable
   and that only items reported by *k* participants are published. A ballot
