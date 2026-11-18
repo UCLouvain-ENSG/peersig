@@ -2,13 +2,14 @@
 //! anonymous, what JA4 is), /participate (download, code, join), and the
 //! enrollment pages (a code by e-mail, with a GitHub account, or from the
 //! institution's network). Pages and assets are compiled in. Like the API,
-//! no handler logs the client address; only the network enrollment looks
-//! at it, and forgets it.
+//! no handler logs the client address. Enrollment looks at it to check the
+//! institution's network and to count requests per address (in memory, see
+//! `enroll`), then forgets it. The admin page is in `admin`.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, OnceLock};
 
-use axum::extract::{ConnectInfo, Form, Path, Query, Request, State as AxState};
+use axum::extract::{ConnectInfo, Form, FromRequest, Path, Query, Request, State as AxState};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -33,7 +34,7 @@ const INDEX: &str = include_str!("../site/index.html");
 const PARTICIPATE: &str = include_str!("../site/participate.html");
 const SOURCE: &str = "https://github.com/UCLouvain-ENSG/peersig";
 
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
@@ -47,7 +48,7 @@ const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-
                    form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 /// A whole page: header, `body`, footer.
-fn layout(title: &str, description: &str, active: &str, body: &str, scripts: &[&str]) -> String {
+pub(crate) fn layout(title: &str, description: &str, active: &str, body: &str, scripts: &[&str]) -> String {
     let v = assets_version();
     let nav = [("/", "Home"), ("/#anonymity", "Anonymity"), ("/#ja4", "JA4"), ("/v1/released", "Data")]
         .iter()
@@ -86,7 +87,7 @@ fn layout(title: &str, description: &str, active: &str, body: &str, scripts: &[&
     )
 }
 
-fn html(status: StatusCode, doc: String) -> Response {
+pub(crate) fn html(status: StatusCode, doc: String) -> Response {
     (
         status,
         [
@@ -105,7 +106,7 @@ fn page(status: StatusCode, title: &str, body: String) -> Response {
     html(status, layout(&format!("{} · PeerSig", title), "PeerSig enrollment", "", &format!(r#"<div class="msg">{}</div>"#, body), &[]))
 }
 
-fn message(status: StatusCode, title: &str, text: &str) -> Response {
+pub(crate) fn message(status: StatusCode, title: &str, text: &str) -> Response {
     page(status, title, format!(r#"<h2>{}</h2><p>{}</p>"#, esc(title), text))
 }
 
@@ -119,7 +120,18 @@ fn refusal(r: Refusal) -> Response {
         // Same answer as when the message went out: the page must not tell
         // whether an address asked before.
         Refusal::Recent => sent(),
+        Refusal::Address => message(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many requests",
+            "Too many requests for a code came from your connection in the last hour. Please try again in an hour.",
+        ),
     }
+}
+
+/// The visitor's address, for enrollment only (see `Enrollment::client`).
+fn client(w: &Web, req: &Request) -> Option<IpAddr> {
+    let peer = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
+    w.enroll.client(peer, req.headers())
 }
 
 fn sent() -> Response {
@@ -220,14 +232,18 @@ struct MailForm {
     email: String,
 }
 
-async fn by_mail(AxState(w): AxState<Arc<Web>>, Form(f): Form<MailForm>) -> Response {
+async fn by_mail(AxState(w): AxState<Arc<Web>>, req: Request) -> Response {
     if w.enroll.mail.is_none() {
         return message(StatusCode::NOT_FOUND, "Not available", "This server does not hand out codes by e-mail.");
     }
+    let ip = client(&w, &req);
+    let Ok(Form(f)) = Form::<MailForm>::from_request(req, &()).await else {
+        return message(StatusCode::BAD_REQUEST, "Not an e-mail address", r#"<a href="/participate#code">Try again</a>."#);
+    };
     let Some((to, id)) = enroll::parse_address(&f.email) else {
         return message(StatusCode::BAD_REQUEST, "Not an e-mail address", r#"<a href="/participate#code">Try again</a>."#);
     };
-    match enroll::by_mail(&w.state, &w.enroll, to, &id).await {
+    match enroll::by_mail(&w.state, &w.enroll, to, &id, ip).await {
         Ok(MailOutcome::Sent) => sent(),
         Ok(MailOutcome::Refused(r)) => refusal(r),
         Err(e) => {
@@ -291,11 +307,13 @@ struct Callback {
     state: Option<String>,
 }
 
-async fn github_callback(AxState(w): AxState<Arc<Web>>, Query(q): Query<Callback>) -> Response {
+async fn github_callback(AxState(w): AxState<Arc<Web>>, Query(q): Query<Callback>, req: Request) -> Response {
+    let ip = client(&w, &req);
+    drop(req);
     let (Some(code), Some(st)) = (q.code, q.state) else {
         return message(StatusCode::BAD_REQUEST, "Sign-in cancelled", r#"No code was handed out. <a href="/participate#code">Back</a>."#);
     };
-    match enroll::by_github(&w.state, &w.enroll, &code, &st).await {
+    match enroll::by_github(&w.state, &w.enroll, &code, &st, ip).await {
         Ok(GitHubOutcome::Code(c)) => show_code(&w, &c),
         Ok(GitHubOutcome::Enough) => message(
             StatusCode::OK,
@@ -309,6 +327,11 @@ async fn github_callback(AxState(w): AxState<Arc<Web>>, Query(q): Query<Callback
                 "GitHub accounts younger than {} days cannot get a code here, against throwaway accounts. Use the e-mail option, or come back later.",
                 w.enroll.github.as_ref().map_or(0, |g| g.min_age_days)
             ),
+        ),
+        Ok(GitHubOutcome::Banned) => message(
+            StatusCode::FORBIDDEN,
+            "No code for this account",
+            "This GitHub account cannot get a code here. If you think this is a mistake, write to the study team.",
         ),
         Ok(GitHubOutcome::Refused(r)) => refusal(r),
         Err(e) => {
@@ -327,5 +350,6 @@ pub fn router(web: Arc<Web>) -> Router {
         .route("/enroll/network", post(by_network))
         .route("/enroll/github", get(github_start))
         .route("/enroll/github/callback", get(github_callback))
+        .merge(crate::admin::routes())
         .with_state(web)
 }

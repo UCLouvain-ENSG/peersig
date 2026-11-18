@@ -2,6 +2,7 @@
 //! participants, counts anonymous ballots arriving through Oblivious HTTP,
 //! and publishes the items reported by enough participants.
 
+pub mod admin;
 pub mod api;
 pub mod db;
 pub mod enroll;

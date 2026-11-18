@@ -1,5 +1,6 @@
 //! `peersig-server`: run the collection server, and administer it from the
-//! host (enrollment codes, statistics, exports). There is no admin HTTP API.
+//! host (enrollment codes, statistics, exports) or from its /admin page
+//! (codes and bans, for the GitHub accounts in --admin-github).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -112,10 +113,22 @@ struct WebArgs {
     #[arg(long, env = "PEERSIG_ENROLL_NETWORK_NAME", default_value = "institution's")]
     enroll_network_name: String,
     /// Behind a reverse proxy on this machine: the header in which it puts
-    /// the client's address, on /enroll/network only, overwriting what the
-    /// client sent (Apache: RequestHeader set X-PeerSig-Client "expr=%{REMOTE_ADDR}").
+    /// the client's address, on /enroll/ only, overwriting what the client
+    /// sent (Apache: RequestHeader set X-PeerSig-Client "expr=%{REMOTE_ADDR}").
+    /// Used to check the network, and for --enroll-per-address.
     #[arg(long, env = "PEERSIG_CLIENT_ADDRESS_HEADER")]
     client_address_header: Option<String>,
+    /// Requests for a code by e-mail or GitHub one client address (an IPv4
+    /// address, an IPv6 /64) can make per hour, counted in memory only
+    /// under a keyed hash; 0: no limit. Behind a proxy, needs
+    /// --client-address-header.
+    #[arg(long, env = "PEERSIG_ENROLL_PER_ADDRESS", default_value_t = 5)]
+    enroll_per_address: u32,
+    /// GitHub logins (comma-separated) allowed into /admin, signing in
+    /// through the GitHub app above (its callback covers /admin's). Unset:
+    /// no /admin.
+    #[arg(long, env = "PEERSIG_ADMIN_GITHUB", value_delimiter = ',')]
+    admin_github: Vec<String>,
     /// A note shown at the top of the page, e.g. the limits of a pilot.
     #[arg(long, env = "PEERSIG_NOTICE")]
     notice: Option<String>,
@@ -136,6 +149,12 @@ fn enrollment(w: &WebArgs) -> Result<Enrollment> {
     }
     let mut e = Enrollment::new(public.unwrap_or(""), set(&w.relay_url), w.codes_per_identity, w.enroll_per_hour);
     e.contact = set(&w.contact).map(String::from);
+    e.per_address = w.enroll_per_address;
+    e.address_header = set(&w.client_address_header).map(String::from);
+    e.admins = w.admin_github.iter().map(|l| l.trim().trim_start_matches('@').to_ascii_lowercase()).filter(|l| !l.is_empty()).collect();
+    if !e.admins.is_empty() && public.is_none() {
+        bail!("--admin-github needs --public-url");
+    }
     if let Some(url) = set(&w.smtp_url) {
         let from = set(&w.mail_from).context("--smtp-url needs --mail-from")?;
         e.mail = Some(Mail::smtp(url, from)?);
@@ -150,6 +169,9 @@ fn enrollment(w: &WebArgs) -> Result<Enrollment> {
     if let Some(id) = set(&w.github_client_id) {
         let secret = set(&w.github_client_secret).context("--github-client-id needs --github-client-secret")?;
         e.github = Some(GitHub::new(id, secret, w.github_min_age_days)?);
+    }
+    if !e.admins.is_empty() && e.github.is_none() {
+        bail!("--admin-github needs the GitHub app (--github-client-id)");
     }
     Ok(e)
 }
@@ -217,19 +239,21 @@ fn main() -> Result<()> {
                     .into_iter()
                     .flatten()
                     .collect();
+            let admin = if enroll.admin_enabled() { format!("; /admin for {} GitHub account(s)", enroll.admins.len()) } else { String::new() };
             let state = State::new(conn, s.clone(), system_clock())?;
             let app = api::router(state.clone()).merge(web::router(std::sync::Arc::new(web::Web { state, enroll, notice: set(&w.notice).map(String::from) })));
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async move {
                 let l = tokio::net::TcpListener::bind(&listen).await.with_context(|| listen.clone())?;
                 tracing::info!(
-                    "listening on {}; epochs of {} days from {}; k={}/{}; enrollment: {}",
+                    "listening on {}; epochs of {} days from {}; k={}/{}; enrollment: {}{}",
                     listen,
                     s.epochs.length / 86400,
                     chrono::DateTime::from_timestamp(s.epochs.origin, 0).unwrap().date_naive(),
                     s.k_hello,
                     s.k_domain,
-                    if methods.is_empty() { "codes from the study team only".to_string() } else { methods.join(", ") }
+                    if methods.is_empty() { "codes from the study team only".to_string() } else { methods.join(", ") },
+                    admin
                 );
                 // The connection's address reaches the network enrollment only.
                 axum::serve(l, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
@@ -241,11 +265,8 @@ fn main() -> Result<()> {
             })?;
         }
         Cmd::Codes { cmd: CodesCmd::Add { count, prefix } } => {
-            let existing = db::list_codes(&conn)?.len();
-            for i in 0..count {
-                let code = db::new_code();
-                let label = format!("{}{:02}", prefix, existing as u32 + i + 1);
-                db::add_code(&conn, &code, &label)?;
+            let mut conn = conn;
+            for (label, code) in db::add_codes(&mut conn, count, &prefix)? {
                 println!("{}\t{}", label, code);
             }
             eprintln!("Only a hash of each code is stored: give each participant theirs now.");

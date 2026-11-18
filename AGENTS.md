@@ -18,7 +18,15 @@ product: a change that weakens one is a bug even if every test passes.
   e-mail address or GitHub id and a count, never the identity itself, and
   nothing that links it to the code. Its pages answer alike whether or not
   an address enrolled before. Network enrollment looks at the client's
-  address for that request only and keeps nothing about it.
+  address for that request only and keeps nothing about it. The
+  per-address limit on codes by e-mail or GitHub keeps, in memory only, a
+  count under a hash of the address's /32 or /64 keyed with a random key
+  replaced every hour; nothing about addresses is written or logged, so
+  there are no IP bans. Bans (the admin page) hold the same keyed hash as
+  `identities`, or a mail domain.
+- The admin page (`crates/server/src/admin.rs`) shows what the CLI shows
+  (code labels, epochs, counts), to the GitHub logins in `--admin-github`.
+  It must not show or keep more: no ballots, no addresses, no identities.
 - The app fetches the config and the gateway key anonymously,
   and checks the token key and the gateway key as described in
   docs/privacy.md. Do not shortcut these checks.

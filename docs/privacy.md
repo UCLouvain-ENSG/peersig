@@ -79,6 +79,24 @@ The page hands out a limited number of codes per hour, and gives the same
 answer whether or not an address had codes already, so it cannot be used
 to test addresses.
 
+Against spam, one client address can ask for a code by e-mail or GitHub
+only a few times an hour (`--enroll-per-address`, 5). The server counts
+those requests in memory, under a hash of the address's /32 (IPv4) or /64
+(IPv6) keyed with a random key that is replaced, with the counts, every
+hour. It writes nothing and logs nothing about the address, and after the
+hour even the server cannot tell which counts were whose. The reverse
+proxy passes the client's address on `/enroll/` only. Network enrollment
+is not counted: its visitors often share an address.
+
+The study team's admin page (GitHub sign-in, for the accounts the server
+lists) creates, lists and revokes codes, like the command line, and can ban
+an e-mail address, a mail domain or a GitHub account from getting codes.
+A banned address or account is stored as the same keyed hash as above, a
+domain in clear. A banned address gets the usual answer and no message.
+Banning cannot reach codes already handed out, since nothing links them
+to an address or account, and there is no ban by network address: the
+server keeps none.
+
 ### 1. Review and consent
 
 The app opens each week's report in *review* for 24 hours (configurable),

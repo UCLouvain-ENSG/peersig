@@ -12,6 +12,9 @@
 //! - `identities`: for codes handed out by the web page, a keyed hash of
 //!   the e-mail address or GitHub account and how many codes it got. Not
 //!   the address, not which code, not when.
+//! - `bans`: e-mail addresses and GitHub accounts refused a code, as the
+//!   same keyed hash, and mail domains, in clear; the admin's note and the
+//!   day. Never a network address.
 //! - `token_keys`, `meta`: the keys and the epoch layout.
 
 use std::collections::BTreeMap;
@@ -37,6 +40,8 @@ CREATE TABLE IF NOT EXISTS counts(epoch INTEGER NOT NULL, item TEXT NOT NULL, cl
 DROP TABLE IF EXISTS frozen;
 DROP TABLE IF EXISTS catalogue;
 CREATE TABLE IF NOT EXISTS identities(hash TEXT PRIMARY KEY, codes INTEGER NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS bans(kind TEXT NOT NULL, value TEXT NOT NULL, note TEXT NOT NULL, created TEXT NOT NULL,
+    PRIMARY KEY(kind, value)) WITHOUT ROWID;
 ";
 
 pub fn open(path: &str) -> Result<Connection> {
@@ -103,10 +108,31 @@ pub fn code_active(c: &Connection, hash: &str) -> Result<Option<bool>> {
 }
 
 pub fn revoke(c: &Connection, code_or_label: &str) -> Result<usize> {
+    set_revoked(c, code_or_label, true)
+}
+
+/// Revokes, or restores, a code (by code or label). Returns how many.
+pub fn set_revoked(c: &Connection, code_or_label: &str, revoked: bool) -> Result<usize> {
     Ok(c.execute(
-        "UPDATE codes SET revoked = 1 WHERE hash = ?1 OR label = ?2",
-        params![code_hash(code_or_label), code_or_label],
+        "UPDATE codes SET revoked = ?3 WHERE hash = ?1 OR label = ?2",
+        params![code_hash(code_or_label), code_or_label, revoked as i64],
     )?)
+}
+
+/// `count` new codes labelled `<prefix><n>`, n counting all codes, as
+/// (label, code). The codes are returned once: only their hash is stored.
+pub fn add_codes(c: &mut Connection, count: u32, prefix: &str) -> Result<Vec<(String, String)>> {
+    let tx = c.transaction()?;
+    let existing: u32 = tx.query_row("SELECT COUNT(*) FROM codes", [], |r| r.get(0))?;
+    let mut out = Vec::new();
+    for i in 0..count {
+        let code = new_code();
+        let label = format!("{}{:02}", prefix, existing + i + 1);
+        add_code(&tx, &code, &label)?;
+        out.push((label, code));
+    }
+    tx.commit()?;
+    Ok(out)
 }
 
 /// A new code labelled `<prefix><n>`, n counting all codes. Returns (code, label).
@@ -164,6 +190,43 @@ pub fn list_codes(c: &Connection) -> Result<Vec<CodeRow>> {
         out.push(CodeRow { label, created, revoked: revoked != 0, epochs });
     }
     Ok(out)
+}
+
+// ---- bans ----
+
+/// What a ban is on: `mail` and `github` hold the keyed hash of
+/// `enroll::identity`, `domain` a mail domain.
+pub const BAN_KINDS: [&str; 3] = ["mail", "domain", "github"];
+
+pub struct BanRow {
+    pub kind: String,
+    pub value: String,
+    pub note: String,
+    pub created: String,
+}
+
+pub fn add_ban(c: &Connection, kind: &str, value: &str, note: &str) -> Result<()> {
+    let day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    c.execute(
+        "INSERT INTO bans(kind, value, note, created) VALUES(?1, ?2, ?3, ?4)
+         ON CONFLICT(kind, value) DO UPDATE SET note = excluded.note",
+        params![kind, value, note, day],
+    )?;
+    Ok(())
+}
+
+pub fn remove_ban(c: &Connection, kind: &str, value: &str) -> Result<usize> {
+    Ok(c.execute("DELETE FROM bans WHERE kind = ?1 AND value = ?2", params![kind, value])?)
+}
+
+pub fn banned(c: &Connection, kind: &str, value: &str) -> Result<bool> {
+    Ok(c.query_row("SELECT 1 FROM bans WHERE kind = ?1 AND value = ?2", params![kind, value], |_| Ok(())).optional()?.is_some())
+}
+
+pub fn list_bans(c: &Connection) -> Result<Vec<BanRow>> {
+    let mut st = c.prepare("SELECT kind, value, note, created FROM bans ORDER BY created, kind, value")?;
+    let rows = st.query_map([], |r| Ok(BanRow { kind: r.get(0)?, value: r.get(1)?, note: r.get(2)?, created: r.get(3)? }))?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 pub fn issued(c: &Connection, hash: &str, epoch: u32) -> Result<u32> {

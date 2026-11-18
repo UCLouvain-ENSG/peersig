@@ -15,6 +15,14 @@
 //! message; GitHub's access token, for one request. Neither is stored or
 //! logged. From the institution's network, the connection's address is
 //! checked against the network's blocks and forgotten: nothing is kept.
+//!
+//! Against spam: the page hands out `per_hour` codes an hour in all, one
+//! message per address every ten minutes, and `per_address` requests per
+//! client address and hour for codes by e-mail or GitHub. That count lives
+//! in memory only, under a keyed hash of the address's /32 or /64 whose
+//! key is replaced every hour: nothing is written or logged. The admin page
+//! can ban an e-mail address or GitHub account (stored as the same keyed
+//! hash as in `identities`) or a mail domain.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -38,6 +46,10 @@ type HmacSha256 = Hmac<Sha256>;
 const STATE_TTL: i64 = 600;
 /// One message per address in this interval, whatever is asked.
 const MAIL_INTERVAL: Duration = Duration::from_secs(600);
+const HOUR: Duration = Duration::from_secs(3600);
+/// Where GitHub sends an administrator back: under the OAuth app's
+/// callback URL, as GitHub requires.
+pub const ADMIN_CALLBACK: &str = "/enroll/github/callback/admin";
 
 pub struct Enrollment {
     /// The server's public address: links, and GitHub's callback.
@@ -50,10 +62,19 @@ pub struct Enrollment {
     pub per_identity: u32,
     /// Codes the web page hands out per hour, all methods together.
     pub per_hour: u32,
+    /// Requests for a code by e-mail or GitHub one client address can make
+    /// per hour; 0: no limit.
+    pub per_address: u32,
+    /// Behind a reverse proxy on this machine: the header in which it puts
+    /// the client's address on /enroll/ (see `Network::address_header`).
+    pub address_header: Option<String>,
+    /// GitHub logins (lower case) allowed into /admin, through `github`.
+    pub admins: Vec<String>,
     pub mail: Option<Mail>,
     pub github: Option<GitHub>,
     pub network: Option<Network>,
     budget: Mutex<Budget>,
+    by_address: Mutex<PerAddress>,
 }
 
 /// In memory only, and without addresses: how many codes this hour, and
@@ -64,11 +85,41 @@ struct Budget {
     recent: HashMap<String, Instant>,
 }
 
+/// In memory only: requests per client address this hour, under a keyed
+/// hash of the address's /32 (IPv4) or /64 (IPv6). The key is random and
+/// replaced with the counts every hour, so nothing links one hour's
+/// entries to the next, or to an address, once the hour is over.
+struct PerAddress {
+    since: Instant,
+    key: [u8; 32],
+    counts: HashMap<[u8; 16], u32>,
+}
+
+impl PerAddress {
+    fn new() -> Self {
+        let mut key = [0u8; 32];
+        rand::fill(&mut key[..]);
+        PerAddress { since: Instant::now(), key, counts: HashMap::new() }
+    }
+
+    fn slot(&self, ip: IpAddr) -> [u8; 16] {
+        let prefix = match ip {
+            IpAddr::V4(a) => a.octets().to_vec(),
+            IpAddr::V6(a) => a.octets()[..8].to_vec(),
+        };
+        let mut m = <HmacSha256 as Mac>::new_from_slice(&self.key).expect("any key length");
+        m.update(&prefix);
+        m.finalize().into_bytes()[..16].try_into().expect("16 bytes")
+    }
+}
+
 pub enum Refusal {
     /// The hourly budget is spent.
     Busy,
     /// This address got a message a few minutes ago.
     Recent,
+    /// Too many requests from this client address this hour.
+    Address,
 }
 
 impl Enrollment {
@@ -79,11 +130,52 @@ impl Enrollment {
             contact: None,
             per_identity,
             per_hour,
+            per_address: 0,
+            address_header: None,
+            admins: Vec::new(),
             mail: None,
             github: None,
             network: None,
             budget: Mutex::new(Budget { hour: Instant::now(), used: 0, recent: HashMap::new() }),
+            by_address: Mutex::new(PerAddress::new()),
         }
+    }
+
+    /// The client's address, as for the network enrollment.
+    pub fn client(&self, peer: Option<IpAddr>, headers: &HeaderMap) -> Option<IpAddr> {
+        client_address(self.address_header.as_deref(), peer, headers)
+    }
+
+    /// Whether /admin is on: a GitHub app and at least one admin login.
+    pub fn admin_enabled(&self) -> bool {
+        self.github.is_some() && !self.admins.is_empty()
+    }
+
+    /// Codes handed out this hour, and the hourly budget.
+    pub fn budget_used(&self) -> (u32, u32) {
+        let b = self.budget.lock().unwrap();
+        (if b.hour.elapsed() >= HOUR { 0 } else { b.used }, self.per_hour)
+    }
+
+    /// Counts one request from `ip`. Without an address (or from this
+    /// machine, which is a proxy's), nothing is counted: one count for
+    /// every visitor would stop them all.
+    fn take_address(&self, ip: Option<IpAddr>) -> Result<(), Refusal> {
+        let Some(ip) = ip.map(|i| i.to_canonical()) else { return Ok(()) };
+        if self.per_address == 0 || ip.is_loopback() {
+            return Ok(());
+        }
+        let mut a = self.by_address.lock().unwrap();
+        if a.since.elapsed() >= HOUR {
+            *a = PerAddress::new();
+        }
+        let slot = a.slot(ip);
+        let n = a.counts.entry(slot).or_insert(0);
+        if *n >= self.per_address {
+            return Err(Refusal::Address);
+        }
+        *n += 1;
+        Ok(())
     }
 
     pub fn enabled(&self) -> bool {
@@ -95,7 +187,7 @@ impl Enrollment {
     fn take(&self, mail_identity: Option<&str>) -> Result<(), Refusal> {
         let now = Instant::now();
         let mut b = self.budget.lock().unwrap();
-        if now.duration_since(b.hour) >= Duration::from_secs(3600) {
+        if now.duration_since(b.hour) >= HOUR {
             b.hour = now;
             b.used = 0;
         }
@@ -123,6 +215,34 @@ pub fn identity(state: &State, kind: &str, id: &str) -> Result<String> {
     let mut m = <HmacSha256 as Mac>::new_from_slice(&key).expect("any key length");
     m.update(format!("{}:{}", kind, id).as_bytes());
     Ok(m.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect())
+}
+
+/// Whether a ban covers this e-mail identity (`user@domain`): the address
+/// itself, its domain, or a parent of the domain.
+fn mail_banned(state: &State, identity_hash: &str, id: &str) -> Result<bool> {
+    let db = state.db.lock().unwrap();
+    if db::banned(&db, "mail", identity_hash)? {
+        return Ok(true);
+    }
+    let mut d = id.rsplit_once('@').map(|(_, d)| d).unwrap_or_default();
+    loop {
+        if db::banned(&db, "domain", d)? {
+            return Ok(true);
+        }
+        match d.split_once('.') {
+            Some((_, rest)) if rest.contains('.') => d = rest,
+            _ => return Ok(false),
+        }
+    }
+}
+
+/// A mail domain as bans store it: lower case, without `@` or `*.`.
+pub fn ban_domain(s: &str) -> Option<String> {
+    let d = s.trim().trim_start_matches('@').trim_start_matches("*.").trim_end_matches('.').to_ascii_lowercase();
+    let ok = d.len() <= 253
+        && d.contains('.')
+        && d.split('.').all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+    ok.then_some(d)
 }
 
 async fn new_code(state: &Arc<State>, identity: &str, prefix: &'static str, cap: u32) -> Result<Option<(String, String)>> {
@@ -205,10 +325,17 @@ pub enum MailOutcome {
 }
 
 /// Sends a code to `address`. The answer does not say whether the address
-/// had codes already, so the page cannot be used to test addresses.
-pub async fn by_mail(state: &Arc<State>, e: &Enrollment, to: Mailbox, id: &str) -> Result<MailOutcome> {
+/// had codes already, or is banned, so the page cannot be used to test
+/// addresses. `ip`: the client's, counted against `per_address`.
+pub async fn by_mail(state: &Arc<State>, e: &Enrollment, to: Mailbox, id: &str, ip: Option<IpAddr>) -> Result<MailOutcome> {
     let mail = e.mail.as_ref().context("e-mail enrollment is off")?;
+    if let Err(r) = e.take_address(ip) {
+        return Ok(MailOutcome::Refused(r));
+    }
     let identity = identity(state, "mail", id)?;
+    if mail_banned(state, &identity, id)? {
+        return Ok(MailOutcome::Sent);
+    }
     if let Err(r) = e.take(Some(&identity)) {
         return Ok(MailOutcome::Refused(r));
     }
@@ -310,16 +437,30 @@ impl GitHub {
     }
 }
 
-fn callback(e: &Enrollment) -> String {
-    format!("{}/enroll/github/callback", e.public_url)
+/// What a GitHub sign-in is for: a code, or the admin page. Each has its
+/// own callback, and a `state` made for one is refused by the other.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    Enroll,
+    Admin,
+}
+
+fn callback(e: &Enrollment, p: Purpose) -> String {
+    match p {
+        Purpose::Enroll => format!("{}/enroll/github/callback", e.public_url),
+        Purpose::Admin => format!("{}{}", e.public_url, ADMIN_CALLBACK),
+    }
 }
 
 /// The MAC of a sign-in's `state`: GitHub hands it back, and only this
-/// server could have made it.
-fn state_mac(state: &State, payload: &str) -> Result<HmacSha256> {
+/// server could have made it, for this purpose.
+fn state_mac(state: &State, p: Purpose, payload: &str) -> Result<HmacSha256> {
     let key = db::secret(&state.db.lock().unwrap(), "enroll-key")?;
     let mut m = <HmacSha256 as Mac>::new_from_slice(&key).expect("any key length");
-    m.update(b"github-state:");
+    m.update(match p {
+        Purpose::Enroll => b"github-state:".as_slice(),
+        Purpose::Admin => b"admin-state:".as_slice(),
+    });
     m.update(payload.as_bytes());
     Ok(m)
 }
@@ -327,23 +468,27 @@ fn state_mac(state: &State, payload: &str) -> Result<HmacSha256> {
 /// Where to send the browser: GitHub's authorization page. No scope is
 /// asked for: the token can only read public profile data.
 pub fn authorize_url(state: &State, e: &Enrollment) -> Result<String> {
+    sign_in_url(state, e, Purpose::Enroll)
+}
+
+pub fn sign_in_url(state: &State, e: &Enrollment, p: Purpose) -> Result<String> {
     let gh = e.github.as_ref().context("GitHub enrollment is off")?;
     let mut nonce = [0u8; 16];
     rand::fill(&mut nonce[..]);
     let payload = format!("{}.{}", (state.clock)(), peersig_proto::b64::encode(&nonce));
-    let token = format!("{}.{}", payload, peersig_proto::b64::encode(&state_mac(state, &payload)?.finalize().into_bytes()));
+    let token = format!("{}.{}", payload, peersig_proto::b64::encode(&state_mac(state, p, &payload)?.finalize().into_bytes()));
     let u = reqwest::Url::parse_with_params(
         &format!("{}/login/oauth/authorize", gh.web),
-        &[("client_id", gh.client_id.as_str()), ("redirect_uri", &callback(e)), ("state", &token), ("allow_signup", "false")],
+        &[("client_id", gh.client_id.as_str()), ("redirect_uri", &callback(e, p)), ("state", &token), ("allow_signup", "false")],
     )?;
     Ok(u.to_string())
 }
 
-fn check_state(state: &State, token: &str) -> Result<()> {
+fn check_state(state: &State, p: Purpose, token: &str) -> Result<()> {
     let (payload, mac) = token.rsplit_once('.').context("malformed state")?;
     let ts: i64 = payload.split('.').next().unwrap_or_default().parse().context("malformed state")?;
     let mac = peersig_proto::b64::decode(mac).ok().context("malformed state")?;
-    state_mac(state, payload)?.verify_slice(&mac).ok().context("this sign-in did not start here")?;
+    state_mac(state, p, payload)?.verify_slice(&mac).ok().context("this sign-in did not start here")?;
     let age = (state.clock)() - ts;
     if !(0..=STATE_TTL).contains(&age) {
         bail!("this sign-in took too long; start again");
@@ -356,6 +501,8 @@ pub enum GitHubOutcome {
     /// The account has `per_identity` codes already.
     Enough,
     TooYoung,
+    /// The admin banned this account.
+    Banned,
     Refused(Refusal),
 }
 
@@ -368,14 +515,15 @@ struct TokenResponse {
 #[derive(Deserialize)]
 struct User {
     id: u64,
+    login: String,
     created_at: String,
 }
 
-/// GitHub sent the browser back with `code`: ask who it is, then hand out a
-/// code. The access token is dropped at the end of this function.
-pub async fn by_github(state: &Arc<State>, e: &Enrollment, code: &str, st: &str) -> Result<GitHubOutcome> {
-    let gh = e.github.as_ref().context("GitHub enrollment is off")?;
-    check_state(state, st)?;
+/// GitHub sent the browser back with `code`: who is it? The access token
+/// is dropped at the end of this function.
+async fn github_user(state: &State, e: &Enrollment, p: Purpose, code: &str, st: &str) -> Result<User> {
+    let gh = e.github.as_ref().context("GitHub sign-in is off")?;
+    check_state(state, p, st)?;
     let tok: TokenResponse = gh
         .http
         .post(format!("{}/login/oauth/access_token", gh.web))
@@ -384,7 +532,7 @@ pub async fn by_github(state: &Arc<State>, e: &Enrollment, code: &str, st: &str)
             ("client_id", gh.client_id.as_str()),
             ("client_secret", gh.client_secret.as_str()),
             ("code", code),
-            ("redirect_uri", &callback(e)),
+            ("redirect_uri", &callback(e, p)),
         ])
         .send()
         .await
@@ -412,11 +560,25 @@ pub async fn by_github(state: &Arc<State>, e: &Enrollment, code: &str, st: &str)
         .await
         .context("GitHub")?;
     drop(access);
+    Ok(user)
+}
+
+/// GitHub sent the browser back with `code`: hand out a code. `ip`: the
+/// client's, counted against `per_address`.
+pub async fn by_github(state: &Arc<State>, e: &Enrollment, code: &str, st: &str, ip: Option<IpAddr>) -> Result<GitHubOutcome> {
+    let gh = e.github.as_ref().context("GitHub enrollment is off")?;
+    if let Err(r) = e.take_address(ip) {
+        return Ok(GitHubOutcome::Refused(r));
+    }
+    let user = github_user(state, e, Purpose::Enroll, code, st).await?;
     let created = chrono::DateTime::parse_from_rfc3339(&user.created_at).context("GitHub account date")?;
     if (state.clock)() - created.timestamp() < gh.min_age_days as i64 * 86400 {
         return Ok(GitHubOutcome::TooYoung);
     }
     let identity = identity(state, "github", &user.id.to_string())?;
+    if db::banned(&state.db.lock().unwrap(), "github", &identity)? {
+        return Ok(GitHubOutcome::Banned);
+    }
     if let Err(r) = e.take(None) {
         return Ok(GitHubOutcome::Refused(r));
     }
@@ -424,6 +586,39 @@ pub async fn by_github(state: &Arc<State>, e: &Enrollment, code: &str, st: &str)
         Some((code, _)) => GitHubOutcome::Code(code),
         None => GitHubOutcome::Enough,
     })
+}
+
+/// An administrator came back from GitHub: their login (lower case) if it
+/// is one of `admins`, else None. Nothing is stored.
+pub async fn admin_sign_in(state: &State, e: &Enrollment, code: &str, st: &str) -> Result<Option<String>> {
+    let login = github_user(state, e, Purpose::Admin, code, st).await?.login.to_ascii_lowercase();
+    Ok(e.admins.contains(&login).then_some(login))
+}
+
+/// A GitHub account's number, from its login (public data, no token), to
+/// ban it. None: no such account.
+pub async fn github_id(e: &Enrollment, login: &str) -> Result<Option<u64>> {
+    let gh = e.github.as_ref().context("GitHub sign-in is off")?;
+    let login = login.trim().trim_start_matches('@');
+    if login.is_empty() || login.len() > 39 || !login.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return Ok(None);
+    }
+    #[derive(Deserialize)]
+    struct Account {
+        id: u64,
+    }
+    let r = gh
+        .http
+        .get(format!("{}/users/{}", gh.api, login))
+        .header("accept", "application/vnd.github+json")
+        .header("x-github-api-version", "2022-11-28")
+        .send()
+        .await
+        .context("GitHub")?;
+    if r.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    Ok(Some(r.error_for_status().context("GitHub")?.json::<Account>().await.context("GitHub")?.id))
 }
 
 // ---------------------------------------------------------------- network
@@ -473,20 +668,28 @@ pub struct Network {
     pub address_header: Option<String>,
 }
 
+/// The visitor's address: the connection's, or, from a proxy on this
+/// machine, the last entry of `header`.
+fn client_address(header: Option<&str>, peer: Option<IpAddr>, headers: &HeaderMap) -> Option<IpAddr> {
+    let peer = peer?;
+    let Some(h) = header else { return Some(peer) };
+    if !peer.is_loopback() {
+        return Some(peer);
+    }
+    let v = headers.get_all(h).iter().last();
+    // Once: a warning per request would log when people enroll.
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if v.is_none() && !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!("no {} header from the proxy: check that it sets it on /enroll/ (warned once)", h);
+    }
+    v?.to_str().ok()?.rsplit(',').next()?.trim().parse().ok()
+}
+
 impl Network {
     /// The visitor's address: the connection's, or, from a proxy on this
     /// machine, the last entry of `address_header`.
     pub fn client(&self, peer: Option<IpAddr>, headers: &HeaderMap) -> Option<IpAddr> {
-        let peer = peer?;
-        let Some(h) = &self.address_header else { return Some(peer) };
-        if !peer.is_loopback() {
-            return Some(peer);
-        }
-        let v = headers.get_all(h.as_str()).iter().last();
-        if v.is_none() {
-            tracing::warn!("no {} header from the proxy: check that it sets it on /enroll/network", h);
-        }
-        v?.to_str().ok()?.rsplit(',').next()?.trim().parse().ok()
+        client_address(self.address_header.as_deref(), peer, headers)
     }
 
     pub fn contains(&self, ip: IpAddr) -> bool {
@@ -501,6 +704,8 @@ pub enum NetworkOutcome {
 }
 
 /// A code for a visitor from the network. `ip` is checked, then dropped.
+/// Not counted against `per_address`: only the network's visitors can ask,
+/// and many of them may share an address (NAT on Wi-Fi, the VPN).
 pub async fn by_network(state: &Arc<State>, e: &Enrollment, ip: Option<IpAddr>) -> Result<NetworkOutcome> {
     let net = e.network.as_ref().context("enrollment from the network is off")?;
     if !ip.is_some_and(|ip| net.contains(ip)) {
@@ -517,6 +722,34 @@ pub async fn by_network(state: &Arc<State>, e: &Enrollment, ip: Option<IpAddr>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn per_address() {
+        let mut e = Enrollment::new("https://x.example", None, 3, 100);
+        let (a, b): (IpAddr, IpAddr) = ("198.51.100.7".parse().unwrap(), "2001:db8:1:2::9".parse().unwrap());
+        assert!(e.take_address(Some(a)).is_ok(), "no limit by default");
+        e.per_address = 2;
+        assert!(e.take_address(Some(a)).is_ok() && e.take_address(Some(a)).is_ok());
+        assert!(matches!(e.take_address(Some(a)), Err(Refusal::Address)));
+        // Same /64; the IPv4-mapped form of `a`; another address; no address
+        // or this machine (a proxy without the header): not counted.
+        assert!(e.take_address(Some(b)).is_ok() && e.take_address(Some("2001:db8:1:2:ffff::1".parse().unwrap())).is_ok());
+        assert!(matches!(e.take_address(Some("2001:db8:1:2::1".parse().unwrap())), Err(Refusal::Address)));
+        assert!(matches!(e.take_address(Some("::ffff:198.51.100.7".parse().unwrap())), Err(Refusal::Address)));
+        assert!(e.take_address(Some("198.51.100.8".parse().unwrap())).is_ok());
+        for _ in 0..5 {
+            assert!(e.take_address(None).is_ok() && e.take_address(Some("127.0.0.1".parse().unwrap())).is_ok());
+        }
+    }
+
+    #[test]
+    fn ban_domains() {
+        assert_eq!(ban_domain(" @Spam.Example.ORG. ").as_deref(), Some("spam.example.org"));
+        assert_eq!(ban_domain("*.example.org").as_deref(), Some("example.org"));
+        for bad in ["org", "", "exa mple.org", "a..org", "x@y.org"] {
+            assert_eq!(ban_domain(bad), None, "{}", bad);
+        }
+    }
 
     #[test]
     fn blocks() {

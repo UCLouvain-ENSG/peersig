@@ -70,7 +70,9 @@ The web page and enrollment from it (`serve` only):
 | `--enroll-per-hour` | `PEERSIG_ENROLL_PER_HOUR` | 60 | Codes the page hands out per hour |
 | `--enroll-networks` | `PEERSIG_ENROLL_NETWORKS` | none | Address blocks whose visitors get a code with one click, comma-separated (`130.104.0.0/16,2001:6a8:3080::/44`) |
 | `--enroll-network-name` | `PEERSIG_ENROLL_NETWORK_NAME` | institution's | Their name on the page |
-| `--client-address-header` | `PEERSIG_CLIENT_ADDRESS_HEADER` | none | Behind a proxy: where it puts the client's address on `/enroll/network` |
+| `--client-address-header` | `PEERSIG_CLIENT_ADDRESS_HEADER` | none | Behind a proxy: where it puts the client's address on `/enroll/` |
+| `--enroll-per-address` | `PEERSIG_ENROLL_PER_ADDRESS` | 5 | Requests for a code by e-mail or GitHub per client address and hour, counted in memory only; 0: no limit |
+| `--admin-github` | `PEERSIG_ADMIN_GITHUB` | none | GitHub logins allowed into `/admin`, comma-separated (needs the GitHub app) |
 | `--notice` | `PEERSIG_NOTICE` | none | Shown at the top of the page, e.g. the limits of a pilot |
 
 ## Relay
@@ -118,20 +120,34 @@ or any of these:
   id and secret. Accounts younger than `--github-min-age-days` (30) get no
   code.
 - **Network**: `--enroll-networks` with the institution's blocks (its
-  network and VPN). Behind a proxy, the server sees 127.0.0.1: have the
-  proxy put the client's address in a header **on that path only**,
-  overwriting what the client sent, and name it with
-  `--client-address-header`. With Apache:
+  network and VPN).
 
-  ```apache
-  <Location /enroll/network>
-      RequestHeader set X-PeerSig-Client "expr=%{REMOTE_ADDR}"
-  </Location>
-  ```
+Behind a proxy, the server sees 127.0.0.1: have the proxy put the client's
+address in a header **on the enrollment paths only**, overwriting what the
+client sent, and name it with `--client-address-header`. The server checks
+it against the network's blocks, and counts requests for a code by e-mail
+or GitHub per address (`--enroll-per-address`, in memory only). Without the
+header, nothing is counted per address. With Apache:
+
+```apache
+<Location /enroll/>
+    RequestHeader set X-PeerSig-Client "expr=%{REMOTE_ADDR}"
+</Location>
+```
 
 Codes from the page are labelled `M01`, `G02`, `N03`... in `codes list`. The page
 needs `--public-url`; without e-mail or GitHub, it says the study team
 hands out codes.
+
+### Admin page
+
+`--admin-github alice,bob` opens `/admin` to those GitHub accounts, signed
+in through the same OAuth app (GitHub accepts its callback
+`<public-url>/enroll/github/callback/admin`, under the registered one). It
+does what `codes add`, `codes list`, `codes revoke` and `stats` do, and bans
+an e-mail address, a mail domain or a GitHub account from getting codes.
+The session is a signed cookie for 12 hours; removing a login from the list
+ends its sessions at the next restart.
 
 The app's join screen fills in the addresses compiled in as
 `DEFAULT_SERVER` and `DEFAULT_RELAY` (`crates/app/src/core.rs`): change them
