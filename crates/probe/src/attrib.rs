@@ -747,8 +747,11 @@ mod tests {
     }
 
     /// Windows naming: version resources, service hosts, MSIX packages,
-    /// browsers by executable name, GUI or console.
+    /// browsers by executable name, GUI or console. Windows only: system
+    /// files are recognized only there (`is_windows_system`), and other
+    /// systems do not split `C:\...` paths.
     #[test]
+    #[cfg(windows)]
     fn windows_apps() {
         let r = Resolver::new(false);
         let app = |p: &Process| r.app_of(Some(p), None, "self".into());
