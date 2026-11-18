@@ -32,9 +32,15 @@ grep -q "^server names   shared" /tmp/status
 grep -q "^probe " /tmp/status
 
 # The probe loads libpcap and captures (needs CAP_NET_RAW here: root): its
-# daily file starts with a start record (status.json comes every 5 s).
+# daily file starts with a start record, flushed within a second. With no
+# traffic at all (a container), a capture read may not return: stop it
+# with SIGKILL rather than --duration.
 rm -rf /tmp/peersig-smoke
-timeout 20 /usr/lib/peersig/peersig-probe run --dir /tmp/peersig-smoke --quiet --duration 3
+/usr/lib/peersig/peersig-probe run --dir /tmp/peersig-smoke --quiet &
+pid=$!
+sleep 4
+kill -9 "$pid" 2>/dev/null || true
+wait "$pid" 2>/dev/null || true
 grep -q '"type":"start"' /tmp/peersig-smoke/peersig-*.jsonl
 
 if command -v systemd-analyze >/dev/null; then

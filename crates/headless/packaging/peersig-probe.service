@@ -18,6 +18,9 @@ StateDirectoryMode=0700
 ExecStart=/usr/lib/peersig/peersig-probe run --dir /var/lib/peersig/logs --quiet
 Restart=always
 RestartSec=10
+# On a machine with no traffic at all, a capture read may not return to
+# see the stop request: do not wait the default 90 s for it.
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target
