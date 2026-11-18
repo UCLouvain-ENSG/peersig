@@ -50,7 +50,7 @@ const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-
 /// A whole page: header, `body`, footer.
 pub(crate) fn layout(title: &str, description: &str, active: &str, body: &str, scripts: &[&str]) -> String {
     let v = assets_version();
-    let nav = [("/", "Home"), ("/#anonymity", "Anonymity"), ("/#ja4", "JA4"), ("/v1/released", "Data")]
+    let nav = [("/", "Home"), ("/#anonymity", "Anonymity"), ("/#ja4", "JA4"), ("/data", "Data")]
         .iter()
         .map(|(href, name)| format!(r#"<a href="{}"{}>{}</a>"#, href, if *href == active { r#" class="on""# } else { "" }, name))
         .collect::<String>();
@@ -78,7 +78,7 @@ pub(crate) fn layout(title: &str, description: &str, active: &str, body: &str, s
 </main>
 <footer><div class="in">
   <span>PeerSig, a study of the <a href="https://github.com/UCLouvain-ENSG">Efficiency of Networked Systems Group</a>, UCLouvain. Apache-2.0.</span>
-  <span><a href="{SOURCE}/blob/main/docs/privacy.md">Privacy design</a> · <a href="/v1/released">Published table</a> · <a href="/v1/released/observers">Observers' daily table</a> · <a href="{SOURCE}">Source code</a></span>
+  <span><a href="{SOURCE}/blob/main/docs/privacy.md">Privacy design</a> · <a href="/data">Published tables</a> · <a href="/data#observers">Observers' daily table</a> · <a href="{SOURCE}">Source code</a></span>
 </div></footer>
 </body>
 </html>"#,
@@ -351,5 +351,6 @@ pub fn router(web: Arc<Web>) -> Router {
         .route("/enroll/github", get(github_start))
         .route("/enroll/github/callback", get(github_callback))
         .merge(crate::admin::routes())
+        .merge(crate::data::routes())
         .with_state(web)
 }

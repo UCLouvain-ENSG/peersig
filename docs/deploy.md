@@ -159,7 +159,7 @@ peersig-server --db peersig.db codes add --observer --count 12   # O01  OBS-K7QF
 ```
 
 The admin page lists and revokes them, but does not make them. They run
-the app, or the probe and `peersig-observer` from the command line: see
+the app, or the `peersig-observer` package on a Linux server: see
 [observers.md](observers.md).
 
 The app's join screen fills in the addresses compiled in as
@@ -176,7 +176,8 @@ peersig-server --db peersig.db export --format classifier  # Iris ja4_fingerprin
 
 The released list is also public at `/v1/released`; the observers' daily
 table at `/v1/released/observers` (`export --observers`, see
-[observers.md](observers.md#the-published-table)).
+[observers.md](observers.md#the-published-table)). The site's `/data` page
+shows both, in two tabs, with a filter and a day picker.
 
 ## Releases
 
@@ -187,7 +188,11 @@ Pushing a tag `v<version>` runs `.github/workflows/release.yml`:
   probe inside (on Windows it uses the system's packet capture: nothing
   else to install);
 - `peersig-server`, `peersig-relay`, `peersig-probe` and
-  `peersig-observer` for Linux x86_64;
+  `peersig-observer` for Linux x86_64, and the headless observer's
+  packages (`peersig-observer_<version>_amd64.deb`,
+  `peersig-observer-<version>-1.x86_64.rpm`, built with nfpm by
+  `crates/observer/packaging/build.sh`, installed and checked on the
+  runner by `smoke.sh`);
 - `SHA256SUMS`.
 
 They go to a **draft** release; check it and publish it on GitHub. The tag
@@ -231,6 +236,7 @@ scripts/mirror_release.py /var/www/peersig/download          # or --tag v0.1.3
 ```
 
 It downloads the packages, checks them against the release's `SHA256SUMS`,
-gives each a stable name (`PeerSig-windows-x64.msi`) and replaces
+gives each a stable name (`PeerSig-windows-x64.msi`,
+`peersig-observer-amd64.deb`) and replaces
 `latest.json` last. New packages or page text also need the new
 `peersig-server`: the pages are compiled in.

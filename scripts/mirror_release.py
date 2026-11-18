@@ -22,14 +22,17 @@ import os
 import sys
 import urllib.request
 
-# kind (as in site.js) -> (how the release asset's name ends, stable name)
+# kind (as in site.js) -> (how the release asset's name starts and ends, stable name)
 KINDS = {
-    "macos-arm64": ("_aarch64.dmg", "PeerSig-macos-arm64.dmg"),
-    "macos-x64": ("_x64.dmg", "PeerSig-macos-x64.dmg"),
-    "windows-x64": (".msi", "PeerSig-windows-x64.msi"),
-    "linux-deb": ("_amd64.deb", "PeerSig-linux-amd64.deb"),
-    "linux-rpm": (".x86_64.rpm", "PeerSig-linux-x86_64.rpm"),
-    "linux-appimage": ("_amd64.AppImage", "PeerSig-linux-x86_64.AppImage"),
+    "macos-arm64": ("PeerSig", "_aarch64.dmg", "PeerSig-macos-arm64.dmg"),
+    "macos-x64": ("PeerSig", "_x64.dmg", "PeerSig-macos-x64.dmg"),
+    "windows-x64": ("PeerSig", ".msi", "PeerSig-windows-x64.msi"),
+    "linux-deb": ("PeerSig", "_amd64.deb", "PeerSig-linux-amd64.deb"),
+    "linux-rpm": ("PeerSig", ".x86_64.rpm", "PeerSig-linux-x86_64.rpm"),
+    "linux-appimage": ("PeerSig", "_amd64.AppImage", "PeerSig-linux-x86_64.AppImage"),
+    # The headless dedicated observer (docs/observers.md).
+    "observer-deb": ("peersig-observer_", "_amd64.deb", "peersig-observer-amd64.deb"),
+    "observer-rpm": ("peersig-observer-", ".x86_64.rpm", "peersig-observer-x86_64.rpm"),
 }
 
 
@@ -63,8 +66,8 @@ def main():
 
     os.makedirs(a.dir, exist_ok=True)
     files = {}
-    for kind, (suffix, stable) in KINDS.items():
-        name = next((n for n in assets if n.endswith(suffix)), None)
+    for kind, (prefix, suffix, stable) in KINDS.items():
+        name = next((n for n in assets if n.startswith(prefix) and n.endswith(suffix)), None)
         if name is None:
             print("no %s package in %s" % (kind, rel["tag_name"]))
             continue

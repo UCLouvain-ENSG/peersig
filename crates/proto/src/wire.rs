@@ -15,6 +15,8 @@ pub const PATH_RELEASED: &str = "/v1/released";
 pub const PATH_OHTTP: &str = "/ohttp";
 pub const PATH_OHTTP_KEYS: &str = "/ohttp-keys";
 pub const PATH_OBSERVE: &str = "/v1/observe";
+/// Which observer a code is, and when it last reported (`ObserverCheck`).
+pub const PATH_OBSERVER: &str = "/v1/observer";
 /// The observers' daily table: the list of days, and `/<YYYY-MM-DD>` for one.
 pub const PATH_OBSERVED: &str = "/v1/released/observers";
 
@@ -114,6 +116,23 @@ pub struct ObserverReceipt {
     pub day: u32,
     /// Distinct items counted.
     pub items: usize,
+}
+
+/// Asks the server which observer a code is (`peersig-observer configure`
+/// and `status`).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ObserverCheck {
+    pub code: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ObserverStatus {
+    pub label: String,
+    /// Days reported so far.
+    pub days: u32,
+    /// The last day reported, YYYY-MM-DD (UTC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_day: Option<String>,
 }
 
 /// One day of the observers' table: every item any observer reported,

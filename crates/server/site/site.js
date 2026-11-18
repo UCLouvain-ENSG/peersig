@@ -1,6 +1,7 @@
-// peersig.org: the JA4 walk-through (home page) and the download button
-// (/participate). Everything works without this script; it only animates
-// and picks the right file.
+// peersig.org: the JA4 walk-through (home page), the download tabs
+// (/participate) and the tables (/data). Everything works without this
+// script; it only animates, shows one tab at a time, picks the right file
+// and filters rows.
 (function () {
   "use strict";
   var reduced = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -64,17 +65,61 @@
     }
   }
 
-  // ---- the right download -------------------------------------------------------
-  var main = document.getElementById("dl-main"), label = document.getElementById("dl-label");
-  if (main && label) {
-    var KINDS = {
-      "macos-arm64": { label: "Download for macOS", meta: "Apple Silicon (M1 and newer) · macOS 12 or newer", tip: "dl-tip-mac" },
-      "macos-x64": { label: "Download for macOS (Intel)", meta: "Intel Macs · macOS 12 or newer", tip: "dl-tip-mac" },
-      "windows-x64": { label: "Download for Windows", meta: "Windows 10 and 11 · x64", tip: "dl-tip-windows" },
-      "linux-deb": { label: "Download for Linux (.deb)", meta: "Debian, Ubuntu and derivatives · x86_64", tip: "dl-tip-linux" },
-      "linux-rpm": { label: "Download for Linux (.rpm)", meta: "Fedora, RHEL, openSUSE · x86_64", tip: "dl-tip-linux" },
-      "linux-appimage": { label: "Download for Linux (AppImage)", meta: "x86_64", tip: "dl-tip-linux" }
+  // ---- tabs (/participate, /data) ------------------------------------------------
+  // Without the script every pane shows, one after the other. A link to
+  // #<name> (#server, #observers...) opens tab-<name>.
+  var makeTabs = function (tablist) {
+    var tabs = Array.prototype.slice.call(tablist.querySelectorAll("[role=tab]"));
+    var paneOf = function (t) { return document.getElementById(t.getAttribute("aria-controls")); };
+    var select = function (tab, focus) {
+      tabs.forEach(function (t) {
+        var on = t === tab;
+        t.setAttribute("aria-selected", String(on));
+        t.tabIndex = on ? 0 : -1;
+        paneOf(t).hidden = !on;
+      });
+      if (focus) tab.focus();
     };
+    tabs.forEach(function (t, i) {
+      t.addEventListener("click", function () { select(t, false); });
+      t.addEventListener("keydown", function (ev) {
+        var j = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[ev.key];
+        if (j === undefined) return;
+        ev.preventDefault();
+        select(tabs[(j + tabs.length) % tabs.length], true);
+      });
+    });
+    var named = function () {
+      var t = document.getElementById("tab-" + location.hash.slice(1));
+      return tabs.indexOf(t) >= 0 ? t : null;
+    };
+    window.addEventListener("hashchange", function () { if (named()) select(named(), false); });
+    tablist.hidden = false;
+    tablist.parentNode.classList.add("tabbed");
+    var asked = named();
+    select(asked || tabs[0], false);
+    return { select: select, asked: !!asked };
+  };
+  document.querySelectorAll(".data .tabs[role=tablist]").forEach(makeTabs);
+
+  // ---- /data: filter the rows, pick a day -------------------------------------------
+  document.querySelectorAll("input.filter").forEach(function (input) {
+    var rows = input.parentNode.querySelectorAll("table.items tbody tr");
+    input.hidden = false;
+    input.addEventListener("input", function () {
+      var q = input.value.trim().toLowerCase();
+      rows.forEach(function (r) { r.hidden = q !== "" && r.textContent.toLowerCase().indexOf(q) < 0; });
+    });
+  });
+  document.querySelectorAll("form.day-pick select").forEach(function (sel) {
+    sel.addEventListener("change", function () { sel.form.submit(); });
+  });
+
+  // ---- /participate: the visitor's system ---------------------------------------------
+  // Its tab open; within it, its package first.
+  var tablist = document.querySelector("#download .tabs[role=tablist]");
+  if (tablist) {
+    var dlTabs = makeTabs(tablist);
     var detect = function () {
       var ua = navigator.userAgent;
       var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
@@ -103,6 +148,10 @@
       return "macos-arm64";
     };
     var mb = function (n) { return (n / 1048576).toFixed(1) + " MB"; };
+    var tabFor = function (kind) {
+      var name = /^macos/.test(kind) ? "macos" : /^windows/.test(kind) ? "windows" : /^linux/.test(kind) ? "linux" : "macos";
+      return document.getElementById("tab-" + name);
+    };
     var latest = fetch("/download/latest.json", { cache: "no-cache" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; });
@@ -111,32 +160,31 @@
       var file = function (k) { return rel && rel.files && rel.files[k]; };
       // Versioned names when the release list is known; a package that is
       // not in it (not published here yet) is not offered.
-      document.querySelectorAll("a[data-kind]").forEach(function (a) {
+      document.querySelectorAll(".pane a[data-kind]").forEach(function (a) {
         var f = file(a.getAttribute("data-kind"));
-        if (f) a.href = "/download/" + f.name;
-        else if (rel) a.hidden = true;
+        if (f) {
+          a.href = "/download/" + f.name;
+          a.title = f.name + (f.size ? " · " + mb(f.size) : "");
+        } else if (rel) {
+          a.hidden = true;
+        }
       });
-      var meta = document.getElementById("dl-meta");
-      var k = KINDS[kind];
-      var tips = function (shown) {
-        document.querySelectorAll("[id^='dl-tip-']").forEach(function (t) { t.hidden = t.id !== shown; });
-      };
-      if (!k || (rel && !file(kind))) {
-        label.textContent = kind === "mobile" ? "PeerSig runs on a computer" : "PeerSig runs on macOS, Windows and Linux";
-        main.removeAttribute("href");
-        main.classList.remove("grad-bg");
-        var icon = main.querySelector("svg");
-        if (icon) icon.remove();
-        tips(null);
-        meta.textContent = kind === "mobile" ? "Open this page on a Mac or a PC." : k ? "The package for this system is not published yet." : "Pick your system below.";
-        return;
+      document.querySelectorAll(".pane").forEach(function (pane) {
+        var meta = pane.querySelector(".dl .meta"), shown = pane.querySelectorAll(".dl a[data-kind]:not([hidden])");
+        if (!meta || !rel) return;
+        meta.textContent = shown.length ? meta.textContent + " · version " + rel.version : "Not published here yet.";
+      });
+      // The visitor's package is the highlighted one in its tab.
+      var mine = document.querySelector('.pane a[data-kind="' + kind + '"]:not([hidden])');
+      if (mine) {
+        mine.parentNode.querySelectorAll("a").forEach(function (a) { a.classList.toggle("grad-bg", a === mine); });
       }
-      label.textContent = k.label;
-      var f = file(kind);
-      if (f) main.href = "/download/" + f.name;
-      else main.href = document.querySelector('a[data-kind="' + kind + '"]').href;
-      meta.textContent = k.meta + (rel ? " · version " + rel.version : "") + (f && f.size ? " · " + mb(f.size) : "");
-      tips(k.tip);
+      var note = document.getElementById("dl-note");
+      if (kind === "mobile" || kind === "other") {
+        note.textContent = kind === "mobile" ? "PeerSig runs on a computer: open this page on a Mac or a PC." : "Pick your system:";
+        note.hidden = false;
+      }
+      if (!dlTabs.asked) dlTabs.select(tabFor(kind), false);
     });
   }
 })();

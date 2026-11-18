@@ -8,6 +8,13 @@
 //! --observer`). The server publishes each day's items without threshold:
 //! use it only on machines whose traffic may be published. See
 //! docs/observers.md.
+//!
+//! The `peersig-observer` package (.deb, .rpm) installs both with their
+//! systemd units; `configure` writes `/etc/peersig/observer.conf` (see
+//! [`config`]) and starts them.
+
+mod config;
+mod setup;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -31,6 +38,10 @@ struct Cli {
 
 #[derive(Args, Clone)]
 struct Opts {
+    /// Settings file (KEY=VALUE), read before the options and the
+    /// environment, which override it.
+    #[arg(long, global = true, env = "PEERSIG_CONFIG", default_value = config::DEFAULT_PATH)]
+    config: PathBuf,
     /// Collection server.
     #[arg(long, global = true, env = "PEERSIG_SERVER", default_value = "https://peersig.org")]
     server: String,
@@ -74,6 +85,24 @@ enum Cmd {
     /// Keep running: report each day shortly after midnight UTC, retrying
     /// while the server cannot be reached.
     Run,
+    /// Set this machine up as an observer: check the code with the
+    /// server, write the settings file, start the services. Asks for what
+    /// it is not given.
+    Configure {
+        /// Do not send server names (the default unless --share-domains),
+        /// whatever the settings file says.
+        #[arg(long)]
+        no_share_domains: bool,
+        /// Do not check the code with the server first.
+        #[arg(long)]
+        no_check: bool,
+        /// Write the settings, start nothing.
+        #[arg(long)]
+        no_start: bool,
+    },
+    /// The settings, the code's observer and last report, the probe, the
+    /// services.
+    Status,
 }
 
 /// Minutes after midnight UTC before reporting the day before: the probe
@@ -106,7 +135,7 @@ impl Opts {
         let code = match (&self.code, &self.code_file) {
             (Some(c), _) => c.clone(),
             (None, Some(f)) => std::fs::read_to_string(f).with_context(|| f.display().to_string())?,
-            (None, None) => bail!("give the observer's code with --code-file (or --code, PEERSIG_CODE)"),
+            (None, None) => bail!("no observer code: run `sudo peersig-observer configure`, or give --code-file"),
         };
         let code = code.trim().to_uppercase();
         if !code::is_observer(&code) {
@@ -251,18 +280,44 @@ fn code_label(code: &str) -> String {
     format!("OBS-…-{}", &code[code.len().saturating_sub(4)..])
 }
 
+/// Whether this user can list the log directory (it is the probe's
+/// user's only).
+fn logs_readable(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok()
+}
+
 fn check_logs(dir: &Path) -> Result<()> {
+    if let Err(e) = std::fs::read_dir(dir) {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            bail!("cannot read {}: run as root or as the probe's user (sudo -u peersig peersig-observer ...)", dir.display());
+        }
+    }
     if logs::files(dir).is_empty() {
-        bail!("no probe logs (peersig-<date>.jsonl) in {}: is `peersig-probe run --dir {}` running?", dir.display(), dir.display());
+        bail!("no probe logs (peersig-<date>.jsonl) in {}: is the probe running (`peersig-observer status`)?", dir.display());
     }
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
+fn main() -> Result<()> {
+    // The settings file first, while there is one thread: it only fills
+    // in what the environment does not set.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let loaded = config::load(&config::path_from(&args));
+    let cli = Cli::parse_from(args);
+    tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(start(cli, loaded))
+}
+
+async fn start(cli: Cli, loaded: config::Loaded) -> Result<()> {
     let o = &cli.opts;
+    let configuring = matches!(cli.cmd, Cmd::Configure { .. } | Cmd::Status);
+    if let (config::Loaded::Unreadable(why), false) = (&loaded, configuring) {
+        eprintln!("{}: run as root or as peersig", why);
+    }
     match cli.cmd {
+        Cmd::Configure { no_share_domains, no_check, no_start } => {
+            setup::configure(o, &loaded, &setup::ConfigureArgs { no_share_domains, no_check, no_start }).await?;
+        }
+        Cmd::Status => setup::status(o, &loaded).await?,
         Cmd::Items { day, json } => {
             check_logs(&o.logs)?;
             let (days, today) = o.days().await?;
@@ -340,7 +395,7 @@ mod tests {
         }
         drop(f);
 
-        let o = Opts { server: url, code: Some(code.to_lowercase()), code_file: None, logs: dir.clone(), share_domains: true };
+        let o = Opts { config: dir.join("none.conf"), server: url, code: Some(code.to_lowercase()), code_file: None, logs: dir.clone(), share_domains: true };
         let code = o.code().unwrap();
         let (d2, t2) = o.days().await.unwrap();
         assert_eq!((d2, t2), (days, today));

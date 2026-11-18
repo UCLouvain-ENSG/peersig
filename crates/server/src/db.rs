@@ -370,6 +370,11 @@ pub fn count_observer_report(c: &mut Connection, hash: &str, day: u32, items: &[
     Ok(Spend::Counted)
 }
 
+/// An observer's reports: (days reported, last day).
+pub fn observer_reports(c: &Connection, hash: &str) -> Result<(u32, Option<u32>)> {
+    Ok(c.query_row("SELECT COUNT(*), MAX(day) FROM observer_days WHERE hash = ?1", [hash], |r| Ok((r.get(0)?, r.get(1)?)))?)
+}
+
 /// Days with observer reports, most recent first: (day, observers, items).
 pub fn observed_days(c: &Connection) -> Result<Vec<(u32, u32, u32)>> {
     let mut items: BTreeMap<u32, u32> = BTreeMap::new();

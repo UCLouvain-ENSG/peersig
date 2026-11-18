@@ -140,11 +140,11 @@ pub fn ballot(s: &State, body: &[u8]) -> Reply {
 }
 
 /// "YYYY-MM-DD" of observer day `d`.
-fn day_name(s: &State, d: u32) -> String {
+pub(crate) fn day_name(s: &State, d: u32) -> String {
     chrono::DateTime::from_timestamp(s.settings.epochs.days().start(d), 0).map(|t| t.date_naive().to_string()).unwrap_or_default()
 }
 
-fn day_number(s: &State, name: &str) -> Option<u32> {
+pub(crate) fn day_number(s: &State, name: &str) -> Option<u32> {
     let d = chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").ok()?;
     s.settings.epochs.days().at(d.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
 }
@@ -191,6 +191,25 @@ pub fn observe(s: &State, body: &[u8]) -> Reply {
     match db::count_observer_report(&mut s.db.lock().unwrap(), &hash, r.day, &items) {
         Ok(Spend::Counted) => json(200, &ObserverReceipt { label, day: r.day, items: items.len() }),
         Ok(Spend::AlreadySpent) => err(409, format!("{} already reported {}", label, day_name(s, r.day))),
+        Err(e) => internal(e),
+    }
+}
+
+/// Which observer a code is, and when it last reported. 403 for any
+/// other code, as `observe` answers.
+pub fn observer_status(s: &State, body: &[u8]) -> Reply {
+    let Ok(r) = serde_json::from_slice::<ObserverCheck>(body) else { return err(400, "malformed request") };
+    let hash = db::code_hash(&r.code);
+    let db = s.db.lock().unwrap();
+    let label = match db::code_status(&db, &hash) {
+        Ok(Some(c)) if !c.active => return err(403, "this enrollment code was withdrawn"),
+        Ok(Some(c)) if !c.observer => return err(403, "not a dedicated observer's code"),
+        Ok(Some(c)) => c.label,
+        Ok(None) => return err(403, "unknown enrollment code"),
+        Err(e) => return internal(e),
+    };
+    match db::observer_reports(&db, &hash) {
+        Ok((days, last)) => json(200, &ObserverStatus { label, days, last_day: last.map(|d| day_name(s, d)) }),
         Err(e) => internal(e),
     }
 }
@@ -272,6 +291,7 @@ pub fn router(state: Arc<State>) -> Router {
         )
         .route(PATH_OHTTP, post(ohttp_h))
         .route(PATH_OBSERVED, get(|AxState(s): AxState<Arc<State>>| blocking(move || observed_days(&s))))
+        .route(PATH_OBSERVER, post(|AxState(s): AxState<Arc<State>>, body: Bytes| blocking(move || observer_status(&s, &body))))
         .route(
             &format!("{}/{{day}}", PATH_OBSERVED),
             get(|AxState(s): AxState<Arc<State>>, Path(day): Path<String>| blocking(move || observed_day(&s, &day))),

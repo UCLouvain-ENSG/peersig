@@ -8,7 +8,8 @@ use peersig_proto::client::Client;
 use peersig_proto::token;
 use peersig_proto::wire::{IssueRequest, ObservedDay, ObservedDays, ObserverReport, Released, PATH_OBSERVE, PATH_OBSERVED, PATH_RELEASED};
 use peersig_proto::{AppRef, EpochSpec, Item};
-use peersig_server::{api, db, Settings, State};
+use peersig_server::enroll::Enrollment;
+use peersig_server::{api, db, web, Settings, State};
 
 fn app(name: &str, kind: &str) -> AppRef {
     AppRef { name: name.into(), id: Some("com.example".into()), version: Some("1.0".into()), team_id: None, kind: kind.into(), engine: None }
@@ -44,7 +45,8 @@ async fn observers_report_daily_and_are_published_without_threshold() {
     let state = State::new(conn, settings, clock).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let router = api::router(state.clone());
+    let site = web::Web { state: state.clone(), enroll: Enrollment::new("https://peersig.example.org", None, 3, 60), notice: None };
+    let router = api::router(state.clone()).merge(web::router(Arc::new(site)));
     tokio::spawn(async move { axum::serve(listener, router).await });
     let c = Client::new(&url, None).unwrap();
     let http = reqwest::Client::new();
@@ -62,6 +64,14 @@ async fn observers_report_daily_and_are_published_without_threshold() {
     c.observe(&report(&o2, 9, vec![a.clone(), b.clone()])).await.unwrap().expect("counted");
     // A late day, within the window.
     c.observe(&report(&o2, 3, vec![b.clone()])).await.unwrap().expect("late day counted");
+
+    // Which observer a code is, as `peersig-observer configure` asks.
+    let st = c.observer_status(&o1.to_lowercase()).await.unwrap();
+    assert_eq!((st.label.as_str(), st.days, st.last_day.as_deref()), ("O01", 1, Some("1970-01-10")));
+    assert_eq!(c.observer_status(&o2).await.unwrap().days, 2, "day 9 and a late day 3");
+    for (code, why) in [(p1.as_str(), "not a dedicated observer"), ("OBS-AAAA-BBBB-CCCC", "unknown")] {
+        assert!(c.observer_status(code).await.unwrap_err().to_string().contains(why));
+    }
 
     // Refusals.
     let e = |r: anyhow::Result<_>| r.map(|_: Option<_>| ()).unwrap_err().to_string();
@@ -103,6 +113,19 @@ async fn observers_report_daily_and_are_published_without_threshold() {
     assert_eq!((n(&a), n(&b), n(&x)), (Some(2), Some(1), Some(1)));
     let resp = http.get(format!("{}{}/not-a-day", url, PATH_OBSERVED)).send().await.unwrap();
     assert_eq!(resp.status().as_u16(), 404);
+
+    // The same on the site's data page: the last day by default, any day asked for.
+    let page = |q: &str| {
+        let u = format!("{}/data{}", url, q);
+        let http = http.clone();
+        async move { http.get(u).send().await.unwrap().text().await.unwrap() }
+    };
+    let p = page("").await;
+    assert!(p.contains("1970-01-10: 2 observers reported 3 items") && p.contains("api.example.com") && p.contains("<b>wget</b>"), "{}", p);
+    assert!(p.contains(r#"<option value="1970-01-04">"#) && p.contains("Nothing published yet"));
+    let p = page("?day=1970-01-04").await;
+    assert!(p.contains("1970-01-04: 1 observer reported 1 item") && !p.contains("api.example.com"));
+    assert!(page("?day=1999-01-01").await.contains("1970-01-10: 2 observers"), "an unknown day shows the last");
 
     // Participants' table and counts: untouched.
     now.store(3 * EpochSpec::WEEK, Ordering::SeqCst);

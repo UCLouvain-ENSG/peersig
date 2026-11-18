@@ -6,6 +6,7 @@
 
 pub mod admin;
 pub mod api;
+pub mod data;
 pub mod db;
 pub mod enroll;
 pub mod release;

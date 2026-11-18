@@ -93,8 +93,8 @@ enrollment (by hand, e-mail or GitHub), parameters and releases.
 laptops) whose traffic may be published. With a code from `codes add
 --observer`, they report every day, and each day's items are published at
 `/v1/released/observers` without threshold. They run the app, or the
-probe and `peersig-observer` from the command line:
-[docs/observers.md](docs/observers.md).
+`peersig-observer` package on a Linux server (`sudo peersig-observer
+configure` sets it up): [docs/observers.md](docs/observers.md).
 
 ## Building from source
 
