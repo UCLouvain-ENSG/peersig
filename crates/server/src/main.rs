@@ -64,7 +64,7 @@ enum Cmd {
     Stats,
     /// Released items.
     Export {
-        /// json, or classifier (the Iris traffic classifier's ja4_fingerprints.json format)
+        /// json, or classifier: one {ja4_hash, desc, source, fetched} record per JA4
         #[arg(long, default_value = "json")]
         format: String,
         /// The dedicated observers' daily table instead (no threshold):

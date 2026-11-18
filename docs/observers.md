@@ -154,5 +154,5 @@ the server:
 peersig-server --db peersig.db stats                                     # the last 14 days, after the weeks
 peersig-server --db peersig.db export --observers --day 2026-11-17       # one day, JSON
 peersig-server --db peersig.db export --observers --day 2026-11-01 --since
-peersig-server --db peersig.db export --observers --format classifier    # Iris format, all days
+peersig-server --db peersig.db export --observers --format classifier    # one record per JA4, all days
 ```

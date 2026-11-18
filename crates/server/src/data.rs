@@ -197,7 +197,7 @@ fn render(w: &Web, day: Option<&str>) -> anyhow::Result<String> {
 
   <section class="pane" id="pane-participants" role="tabpanel" aria-labelledby="tab-participants">
     <h3>Participants</h3>
-    <p class="muted">Volunteers' anonymous ballots, counted per week. An item is published once {k_hello} participants reported it in the same week ({k_domain} for server names); its <b>support</b> is the most participants that reported it in one week. {weeks} <a href="/v1/released">JSON</a> · <code>peersig-server export --format classifier</code> for the Iris classifier.</p>
+    <p class="muted">Volunteers' anonymous ballots, counted per week. An item is published once {k_hello} participants reported it in the same week ({k_domain} for server names); its <b>support</b> is the most participants that reported it in one week. {weeks} <a href="/v1/released">JSON</a></p>
     {participants}
   </section>
 

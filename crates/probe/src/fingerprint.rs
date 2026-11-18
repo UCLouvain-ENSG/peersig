@@ -1,7 +1,7 @@
 //! JA4 (FoxIO spec, technical_details/JA4.md), its raw and original-order
-//! variants, JA3, and `ja4_legacy`: the value the Iris traffic classifier
-//! stored before 2026-11-16, to join with TAP records archived before then.
-//! Iris now computes `ja4` as here (`../src/ja4.rs`).
+//! variants, JA3, and `ja4_legacy`: an earlier, non-standard value (the
+//! extension hash without the signature algorithms), to join with TAP
+//! records archived with it before 2026-11-16.
 
 use crate::tls::{is_grease, ClientHello, EXT_ALPN, EXT_SNI};
 use serde::Serialize;
@@ -13,9 +13,8 @@ pub struct Fingerprints {
     pub ja4_r: String,
     pub ja4_o: String,
     pub ja4_ro: String,
-    /// What `examples/traffic_classifier/src/ja4.rs` computed until
-    /// 2026-11-16: its extension hash left out the signature algorithms.
-    /// None for DTLS (Iris has no DTLS parser).
+    /// The earlier value, archived until 2026-11-16: its extension hash
+    /// left out the signature algorithms. None for DTLS (never archived).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ja4_legacy: Option<String>,
     pub ja3: String,

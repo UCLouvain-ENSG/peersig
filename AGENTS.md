@@ -36,9 +36,11 @@ product: a change that weakens one is a bug even if every test passes.
   and checks the token key and the gateway key as described in
   docs/privacy.md. Do not shortcut these checks.
 - The JA4 code (`crates/probe/src/fingerprint.rs`) follows FoxIO's spec and
-  matches tshark 4.6. The Iris classifier (`examples/traffic_classifier/src/ja4.rs`
-  in the lab's Iris fork) computes the same value: change both together.
-  `ja4_legacy` reproduces what Iris stored before 2026-11-16.
+  matches tshark 4.6. `ja4_legacy` is an earlier, non-standard value
+  (extension hash without the signature algorithms), kept to label traffic
+  archived with it before 2026-11-16. PeerSig stands alone: do not name
+  the lab's other projects anywhere (site, app, docs, help, comments);
+  FoxIO's spec and tshark are the references.
 
 ## Building and testing
 

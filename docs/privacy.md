@@ -27,7 +27,7 @@ are.
 Items (`crates/proto/src/item.rs`), at most once per item and week:
 
 - `hello`: OS family and major version (`macos 27`, `windows 11`), transport (tcp, quic,
-  dtls), JA4, the JA4 Iris stored before its fix (`ja4_legacy`), and the
+  dtls), JA4, an earlier non-standard JA4 (`ja4_legacy`), and the
   application: name, bundle id, version, code-signing team, kind (browser,
   app, system, cli), engine.
 - `domain` (opt-in): the same application fields without version, a server

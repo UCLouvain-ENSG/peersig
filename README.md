@@ -85,8 +85,8 @@ peersig-server --db peersig.db export --format classifier > ja4_peersig.json
 peersig-relay --listen 127.0.0.1:8081 --gateway https://peersig.example.org
 ```
 
-The `classifier` export is the `ja4_fingerprints.json` format of the Iris
-traffic classifier. [docs/deploy.md](docs/deploy.md) covers TLS, Docker,
+The `classifier` export is a list of `{ja4_hash, desc, source, fetched}`
+records, one per JA4. [docs/deploy.md](docs/deploy.md) covers TLS, Docker,
 enrollment (by hand, e-mail or GitHub), parameters and releases.
 
 **Dedicated observers** are machines the study runs (lab servers, test

@@ -121,8 +121,8 @@ enum Cmd {
         /// table, json, or classifier (data/ja4_fingerprints.json format)
         #[arg(long, default_value = "table")]
         format: String,
-        /// Fingerprint to group by: ja4, ja4_legacy (what the Iris classifier
-        /// stored before 2026-11-16), ja4_o, ja3
+        /// Fingerprint to group by: ja4, ja4_legacy (the earlier,
+        /// non-standard value archived before 2026-11-16), ja4_o, ja3
         #[arg(long, default_value = "ja4")]
         key: String,
     },

@@ -66,8 +66,9 @@ pub enum Item {
         /// tcp, quic or dtls.
         transport: String,
         ja4: String,
-        /// The JA4 the Iris classifier stored before 2026-11-16, to label
-        /// traffic archived before then.
+        /// An earlier, non-standard JA4 (extension hash without the
+        /// signature algorithms), to label traffic archived with it before
+        /// 2026-11-16.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ja4_legacy: Option<String>,
         app: AppRef,

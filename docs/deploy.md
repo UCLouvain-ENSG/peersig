@@ -171,7 +171,7 @@ for another collection.
 ```sh
 peersig-server --db peersig.db stats                       # per week: codes, reporters, ballots, items
 peersig-server --db peersig.db export                      # released items, JSON
-peersig-server --db peersig.db export --format classifier  # Iris ja4_fingerprints.json format
+peersig-server --db peersig.db export --format classifier  # one {ja4_hash, desc} record per JA4
 ```
 
 The released list is also public at `/v1/released`; the observers' daily

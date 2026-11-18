@@ -144,12 +144,10 @@ need PKTAP metadata: without it, only SNI fills the table.
 ## Fingerprints
 
 `ja4` follows FoxIO's [JA4 spec](https://github.com/FoxIO-LLC/ja4/blob/main/technical_details/JA4.md),
-and so do `ja4_r`, `ja4_o` and `ja4_ro`. The Iris classifier
-(Iris's traffic classifier, `examples/traffic_classifier/src/ja4.rs`)
-computes the same `ja4` since 2026-11-16.
-Before that, its extension hash left out the signature algorithms:
-`ja4_legacy` is that older value, to join with TAP records archived before
-the fix (`summary --key ja4_legacy` groups by it).
+and so do `ja4_r`, `ja4_o` and `ja4_ro`. `ja4_legacy` is an earlier,
+non-standard value whose extension hash left out the signature algorithms,
+to join with TAP records archived with it before 2026-11-16
+(`summary --key ja4_legacy` groups by it).
 
 QUIC Initial packets are decrypted (v1, v2, drafts 23 to 34). A ClientHello
 split over several packets or datagrams is put back together by CRYPTO
@@ -162,7 +160,7 @@ the numerically smallest (0xfefc is DTLS 1.3), which matches Wireshark.
 ### Validation
 
 - `tests/compare_tshark.py` compares JA4 and JA4_r with tshark 4.6, flow by
-  flow. All 131 ClientHellos of Iris's `traces/` matched (TLS 1.0 to 1.3,
+  flow. All 131 ClientHellos of the test traces matched (TLS 1.0 to 1.3,
   SSLv3, QUIC with ML-KEM over two packets, Retry), and so do the two of
   Wireshark's DTLS test captures (DTLS 1.2, and OpenSSL's pre-standard
   0x0100).
