@@ -203,7 +203,7 @@ fn render(w: &Web, day: Option<&str>) -> anyhow::Result<String> {
 
   <section class="pane" id="pane-observers" role="tabpanel" aria-labelledby="tab-observers">
     <h3>Dedicated observers</h3>
-    <p class="muted">Machines the study runs, reporting every day (UTC). Each day's items are published as they are, with how many observers reported them: <b>no threshold</b>, and exact versions. Never mixed with the participants' counts. <a href="/v1/released/observers">JSON: the days</a> · <a href="/participate#server">Run one</a></p>
+    <p class="muted">Machines the study runs, reporting every day (UTC). Each day's items are published as they are, with how many observers reported them: <b>no threshold</b>, and exact versions. Never mixed with the participants' counts. <a href="/v1/released/observers">JSON: the days</a> · <a href="/participate#observers">How a machine becomes one</a></p>
     {observers}
   </section>
 </div>"#,

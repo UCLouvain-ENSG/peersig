@@ -1,0 +1,29 @@
+# PeerSig without a desktop: reports what the probe saw, weekly as a
+# participant or daily as a dedicated observer (package peersig-headless).
+# Settings: /etc/peersig/peersig.conf, written by `peersig configure`.
+[Unit]
+Description=PeerSig reports (participant or dedicated observer)
+Documentation=https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/headless.md
+Wants=network-online.target peersig-probe.service
+After=network-online.target peersig-probe.service
+ConditionPathExists=/etc/peersig/peersig.conf
+
+[Service]
+User=peersig
+Group=peersig
+# Its state (a participant's reports, with the tokens not spent yet) and
+# the items left out, next to the probe's logs.
+StateDirectory=peersig
+StateDirectoryMode=0700
+ExecStart=/usr/bin/peersig run
+Restart=always
+RestartSec=60
+# It reads the probe's logs and its settings, and talks to the server.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

@@ -61,19 +61,20 @@
 
     <section class="pane" id="pane-server" role="tabpanel" aria-labelledby="tab-server">
       <h3>Linux server</h3>
-      <p>For a <b>dedicated observer</b>: a machine the study runs, without a desktop, whose traffic may be published. It needs an observer code (<code>OBS-…</code>) from the study team, reports every day, and its items are <b>published without threshold</b>. To take part from your own computer, use the Linux tab.</p>
+      <p>No desktop needed: the probe and the <code>peersig</code> command, as two system services. The same anonymous weekly ballots as the app; each week's list is reviewed on the command line.</p>
       <div class="dl">
         <div class="row">
-          <a class="btn big grad-bg" data-kind="observer-deb" href="/download/peersig-observer-amd64.deb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>.deb</a>
-          <a class="btn big" data-kind="observer-rpm" href="/download/peersig-observer-x86_64.rpm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>.rpm</a>
+          <a class="btn big grad-bg" data-kind="headless-deb" href="/download/peersig-headless-amd64.deb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>.deb</a>
+          <a class="btn big" data-kind="headless-rpm" href="/download/peersig-headless-x86_64.rpm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>.rpm</a>
         </div>
-        <span class="meta">x86_64 · systemd · the probe and <code>peersig-observer</code>, no desktop needed</span>
+        <span class="meta">x86_64 with systemd · .deb for Debian and Ubuntu, .rpm for Fedora, RHEL and openSUSE</span>
       </div>
-<pre class="cmd"><code>sudo apt install ./peersig-observer_*_amd64.deb    # Debian, Ubuntu
-sudo dnf install ./peersig-observer-*.x86_64.rpm    # Fedora, RHEL
-sudo peersig-observer configure                    # asks for the code, starts it
-sudo peersig-observer status</code></pre>
-      <div class="tip">Steps 2 and 3 below are for the app: an observer's code comes from the study team, and <code>configure</code> takes it. Each day's items appear at <a href="/v1/released/observers">/v1/released/observers</a>. <a href="https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/observers.md">How observers work</a>.</div>
+<pre class="cmd"><code>sudo apt install ./peersig-headless_*_amd64.deb    # Debian, Ubuntu
+sudo dnf install ./peersig-headless-*.x86_64.rpm    # Fedora, RHEL
+sudo peersig configure     # asks for your code (step 2), then starts
+sudo peersig items         # the week's list, before it is sent
+sudo peersig status</code></pre>
+      <div class="tip">Get your code in step 2, then run <code>sudo peersig configure</code> instead of step 3. Each week's list waits a day before it is sent: <code>sudo peersig exclude &lt;id&gt;</code> leaves an item out. <a href="https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/headless.md">More on servers</a>.</div>
     </section>
   </li>
 
@@ -89,4 +90,9 @@ sudo peersig-observer status</code></pre>
     <div class="tip">Then, every Monday, PeerSig shows you last week's list and waits a day: untick anything you do not want to send. It then sends each item as a separate anonymous ballot. The icon in the menu bar (on Windows, the notification area) tells you when.</div>
   </li>
 </ol>
+<div class="aside" id="observers">
+  <h2>Dedicated observers</h2>
+  <p>Besides participants, the study runs <b>dedicated observers</b>: machines whose traffic may be published, such as lab servers and test computers. Any of the systems above becomes one with an observer code (<code>OBS-…</code>) from the study team, entered in the app or in <code>sudo peersig configure</code>. An observer reports every day, not anonymously, and its items are published as they are, without threshold, apart from the participants'. <a href="/data#observers">Their daily table</a> · <a href="https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/observers.md">How they work</a></p>
+</div>
+
 <p class="muted small center">{{CONTACT}}<a href="/#anonymity">How you stay anonymous</a> · <a href="https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/privacy.md">Privacy design</a> · <a href="https://github.com/UCLouvain-ENSG/peersig">Source code</a></p>

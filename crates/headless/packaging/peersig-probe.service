@@ -1,8 +1,8 @@
-# PeerSig capture probe, for a dedicated observer (package peersig-observer).
-# Started by peersig-observer.service, once `peersig-observer configure` ran.
+# PeerSig capture probe, without a desktop (package peersig-headless).
+# Started by peersig.service, once `peersig configure` ran.
 [Unit]
-Description=PeerSig capture probe (dedicated observer)
-Documentation=https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/observers.md
+Description=PeerSig capture probe
+Documentation=https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/headless.md
 After=network.target
 
 [Service]
@@ -15,7 +15,7 @@ CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_DAC_READ_SEARCH CAP_SYS_PTRA
 StateDirectory=peersig
 StateDirectoryMode=0700
 # Daily files peersig-<date>.jsonl, kept 14 days, readable by peersig only.
-ExecStart=/usr/lib/peersig-observer/peersig-probe run --dir /var/lib/peersig/logs --quiet
+ExecStart=/usr/lib/peersig/peersig-probe run --dir /var/lib/peersig/logs --quiet
 Restart=always
 RestartSec=10
 

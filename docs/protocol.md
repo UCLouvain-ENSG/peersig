@@ -21,7 +21,7 @@ accepted for the report epoch only.
 | `GET /v1/released` | OHTTP or direct | Released items with noisy support |
 | `POST /v1/issue` | direct | Token issuance, authenticated by the enrollment code |
 | `POST /v1/observe` | direct | A dedicated observer's report of one day |
-| `POST /v1/observer` | direct | Which observer a code is, and its last report |
+| `POST /v1/code` | direct | What a code is: a participant's, or an observer's and its last report |
 | `GET /v1/released/observers` | direct | Days of the observers' table |
 | `GET /v1/released/observers/<YYYY-MM-DD>` | direct | One day of it: every item, no threshold |
 | `GET /` | direct | Web page: the collection, and how to get a code |
@@ -141,10 +141,11 @@ item once per observer: `observed(day, item, n)`, and
 `observer_days(code hash, day, items)`. `POST /v1/issue` refuses observer
 codes and `POST /v1/observe` participants' codes.
 
-`POST /v1/observer` with `{"code": "OBS-…"}` answers
-`{"label": "O03", "days": 12, "last_day": "2026-11-17"}` for an active
-observer's code, and 403 for any other (as `/v1/observe` does).
-`peersig-observer configure` and `status` use it.
+`POST /v1/code` with `{"code": "…"}` answers `{"observer": false}` for an
+active participant's code (nothing more), `{"observer": true, "label":
+"O03", "days": 12, "last_day": "2026-11-17"}` for an observer's, and 403
+for an unknown or withdrawn one. `peersig configure` and `status` use it;
+like issuance, it goes directly to the server.
 
 `GET /v1/released/observers` returns
 `{"days": [{"day": "2026-11-17", "observers": 3, "items": 412}, …]}`, most

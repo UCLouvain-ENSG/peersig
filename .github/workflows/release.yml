@@ -102,22 +102,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y libpcap-dev patchelf
-      - run: cargo build --locked --release -p peersig-server -p peersig-relay -p peersig-probe -p peersig-observer
-      # The headless dedicated observer: .deb and .rpm, installed and checked here.
-      - name: Observer packages
+      - run: cargo build --locked --release -p peersig-server -p peersig-relay -p peersig-probe -p peersig-headless
+      # PeerSig without a desktop: .deb and .rpm, installed and checked here.
+      - name: Headless packages
         run: |
           curl -sSfL -o "$RUNNER_TEMP/nfpm.deb" https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_amd64.deb
           sudo apt-get install -y "$RUNNER_TEMP/nfpm.deb"
-          crates/observer/packaging/build.sh target/release dist "${TAG#v}"
-          sudo apt-get install -y ./dist/peersig-observer_*_amd64.deb
-          sudo crates/observer/packaging/smoke.sh
+          crates/headless/packaging/build.sh target/release dist "${TAG#v}"
+          sudo apt-get install -y ./dist/peersig-headless_*_amd64.deb
+          sudo crates/headless/packaging/smoke.sh
       - name: Upload
         run: |
           d=peersig-$TAG-linux-x86_64
           mkdir $d
-          cp target/release/peersig-server target/release/peersig-relay target/release/peersig-probe target/release/peersig-observer README.md LICENSE docs/observers.md $d/
+          cp target/release/peersig-server target/release/peersig-relay target/release/peersig-probe target/release/peersig README.md LICENSE docs/headless.md docs/observers.md $d/
           tar -czf $d.tar.gz $d
-          gh release upload "$TAG" $d.tar.gz dist/peersig-observer_*_amd64.deb dist/peersig-observer-*.x86_64.rpm --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" $d.tar.gz dist/peersig-headless_*_amd64.deb dist/peersig-headless-*.x86_64.rpm --clobber --repo "$GITHUB_REPOSITORY"
 
   checksums:
     needs: [app, linux-binaries]

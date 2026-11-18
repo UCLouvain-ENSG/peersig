@@ -172,7 +172,17 @@
       document.querySelectorAll(".pane").forEach(function (pane) {
         var meta = pane.querySelector(".dl .meta"), shown = pane.querySelectorAll(".dl a[data-kind]:not([hidden])");
         if (!meta || !rel) return;
-        meta.textContent = shown.length ? meta.textContent + " · version " + rel.version : "Not published here yet.";
+        if (shown.length) {
+          meta.textContent = meta.textContent + " · version " + rel.version;
+          return;
+        }
+        // Not mirrored here (yet): the release on GitHub has every package.
+        var gh = document.createElement("a");
+        gh.href = "https://github.com/UCLouvain-ENSG/peersig/releases/latest";
+        gh.textContent = "the latest release on GitHub";
+        meta.textContent = "Not on this site yet: download it from ";
+        meta.appendChild(gh);
+        meta.appendChild(document.createTextNode("."));
       });
       // The visitor's package is the highlighted one in its tab.
       var mine = document.querySelector('.pane a[data-kind="' + kind + '"]:not([hidden])');

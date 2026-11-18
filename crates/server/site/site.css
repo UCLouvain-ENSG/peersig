@@ -241,6 +241,10 @@ section.pane { padding: 0; }
 .tabbed .pane > h3 { display: none; }
 .pane[hidden] { display: none; }
 .dl-note { margin: .6rem 0 0; font-size: .9rem; color: var(--muted); }
+.aside { max-width: 46rem; margin: 0 auto 2.5rem; padding: 1.1rem 1.3rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-soft); }
+.aside h2 { font-size: 1.15rem; margin: 0 0 .4rem; }
+.aside p { margin: 0; color: var(--muted); font-size: .93rem; }
+.aside b { color: var(--fg); }
 /* /data: the published tables. */
 .data { max-width: 72rem; margin: 1.5rem auto 3rem; padding: 0 1.2rem; }
 .data .pane > p { max-width: 50rem; }

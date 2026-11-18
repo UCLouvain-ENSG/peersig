@@ -1,8 +1,8 @@
-//! `/etc/peersig/observer.conf`: the observer's settings, as `KEY=VALUE`
-//! lines (no quotes, no expansion, `#` comments), the variables the
-//! options read (`PEERSIG_CODE`, `PEERSIG_SERVER`, `PEERSIG_SHARE_DOMAINS`,
-//! `PEERSIG_LOGS`). `peersig-observer configure` writes it; every command
-//! reads it first, so that options and the environment override it.
+//! `/etc/peersig/peersig.conf`: the settings, as `KEY=VALUE` lines (no
+//! quotes, no expansion, `#` comments), the variables the options read
+//! (`PEERSIG_CODE`, `PEERSIG_SERVER`, `PEERSIG_RELAY`, ...). `peersig
+//! configure` writes it; every command reads it first, so that options
+//! and the environment override it.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -10,9 +10,18 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-pub const DEFAULT_PATH: &str = "/etc/peersig/observer.conf";
+pub const DEFAULT_PATH: &str = "/etc/peersig/peersig.conf";
 /// The variables the file may set.
-pub const KEYS: [&str; 4] = ["PEERSIG_SERVER", "PEERSIG_CODE", "PEERSIG_SHARE_DOMAINS", "PEERSIG_LOGS"];
+pub const KEYS: [&str; 8] = [
+    "PEERSIG_SERVER",
+    "PEERSIG_RELAY",
+    "PEERSIG_CODE",
+    "PEERSIG_SHARE_DOMAINS",
+    "PEERSIG_REVIEW_HOURS",
+    "PEERSIG_SPREAD_MINUTES",
+    "PEERSIG_LOGS",
+    "PEERSIG_STATE",
+];
 
 pub fn parse(text: &str) -> Vec<(String, String)> {
     text.lines()
@@ -70,26 +79,34 @@ pub fn load(path: &Path) -> Loaded {
 /// The settings `configure` writes.
 pub struct Settings {
     pub server: String,
+    /// Participants only ("none" for no relay).
+    pub relay: Option<String>,
     pub code: String,
     pub share_domains: bool,
+    /// Participants only.
+    pub review_hours: Option<u32>,
     pub logs: PathBuf,
 }
 
 /// Writes the file, readable by root and the `peersig` group only (the
-/// code lets anyone holding it publish as this observer).
+/// code lets anyone holding it report for this machine).
 pub fn write(path: &Path, s: &Settings) -> Result<()> {
     let dir = path.parent().context("no directory")?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let text = format!(
-        "# PeerSig dedicated observer (docs/observers.md), written by `peersig-observer configure`.\n\
-         # KEY=VALUE, no quotes. Readable by root and the peersig group only: the code lets\n\
-         # whoever holds it report as this observer.\n\
-         PEERSIG_SERVER={}\nPEERSIG_CODE={}\nPEERSIG_SHARE_DOMAINS={}\nPEERSIG_LOGS={}\n",
-        s.server,
-        s.code,
-        s.share_domains,
-        s.logs.display()
+    let mut text = String::from(
+        "# PeerSig without a desktop (docs/headless.md), written by `peersig configure`.\n\
+         # KEY=VALUE, no quotes. Readable by root and the peersig group only: the code\n\
+         # lets whoever holds it report for this machine.\n",
     );
+    text.push_str(&format!("PEERSIG_SERVER={}\n", s.server));
+    if let Some(r) = &s.relay {
+        text.push_str(&format!("PEERSIG_RELAY={}\n", r));
+    }
+    text.push_str(&format!("PEERSIG_CODE={}\nPEERSIG_SHARE_DOMAINS={}\n", s.code, s.share_domains));
+    if let Some(h) = s.review_hours {
+        text.push_str(&format!("PEERSIG_REVIEW_HOURS={}\n", h));
+    }
+    text.push_str(&format!("PEERSIG_LOGS={}\n", s.logs.display()));
     let tmp = path.with_extension("tmp");
     let _ = std::fs::remove_file(&tmp);
     {
@@ -134,14 +151,22 @@ mod tests {
         assert_eq!(path_from(&args(&["x", "status", "--config", "/tmp/a.conf"])), PathBuf::from("/tmp/a.conf"));
         assert_eq!(path_from(&args(&["x", "--config=/tmp/b.conf", "run"])), PathBuf::from("/tmp/b.conf"));
 
-        let dir = std::env::temp_dir().join(format!("peersig-observer-conf-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("peersig-headless-conf-{}", std::process::id()));
         let p = dir.join("sub/observer.conf");
-        let s = Settings { server: "https://peersig.org".into(), code: "OBS-K7QF-2M9D-XW4P".into(), share_domains: true, logs: "/var/lib/peersig/logs".into() };
+        let s = Settings {
+            server: "https://peersig.org".into(),
+            relay: Some("https://relay.peersig.org".into()),
+            code: "K7QF-2M9D-XW4P".into(),
+            share_domains: true,
+            review_hours: Some(24),
+            logs: "/var/lib/peersig/logs".into(),
+        };
         write(&p, &s).unwrap();
         write(&p, &s).unwrap();
         let back = parse(&std::fs::read_to_string(&p).unwrap());
-        assert_eq!(back.len(), 4);
-        assert!(back.contains(&("PEERSIG_CODE".into(), "OBS-K7QF-2M9D-XW4P".into())));
+        assert_eq!(back.len(), 6);
+        assert!(back.contains(&("PEERSIG_CODE".into(), "K7QF-2M9D-XW4P".into())));
+        assert!(back.contains(&("PEERSIG_RELAY".into(), "https://relay.peersig.org".into())));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

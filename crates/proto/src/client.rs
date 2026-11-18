@@ -134,11 +134,11 @@ impl Client {
         }
     }
 
-    /// Which observer `code` is, and when it last reported. Direct, like
-    /// the report itself.
-    pub async fn observer_status(&self, code: &str) -> Result<ObserverStatus> {
-        let url = format!("{}{}", self.server, PATH_OBSERVER);
-        let r = self.http.post(&url).json(&ObserverCheck { code: code.to_string() }).send().await.with_context(|| url.clone())?;
+    /// What `code` is: a participant's, or which observer and when it last
+    /// reported. Direct, like token issuance.
+    pub async fn code_info(&self, code: &str) -> Result<CodeInfo> {
+        let url = format!("{}{}", self.server, PATH_CODE);
+        let r = self.http.post(&url).json(&CodeCheck { code: code.to_string() }).send().await.with_context(|| url.clone())?;
         let status = r.status().as_u16();
         let body = r.bytes().await?.to_vec();
         if !(200..300).contains(&status) {

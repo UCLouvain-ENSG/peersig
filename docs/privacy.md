@@ -108,6 +108,12 @@ details (how often, which processes), and can untick any of them: an
 unticked item is never sent, that week or later. Nothing is sent while the
 app is not running, and the tray icon changes while ballots are being sent.
 
+On a server, without the app ([headless.md](headless.md)), `peersig
+configure` shows what will be sent and asks for agreement; each week's
+list waits 24 hours the same way, `peersig items` shows it and `peersig
+exclude` leaves an item out for good. The ballots, tokens and relay are
+the app's (`crates/proto/src/participant.rs`).
+
 ### 2. Unlinkable ballots (blind signatures)
 
 Each item is sent as a separate ballot carrying a token: a random nonce with

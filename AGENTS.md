@@ -14,6 +14,10 @@ product: a change that weakens one is a bug even if every test passes.
   stores counters, not ballots. Keep tables `WITHOUT ROWID` and the journal
   out of WAL mode.
 - Every participant asks for `tokens_per_epoch` tokens, whatever it sends.
+- The app and the headless `peersig` (crates/headless, docs/headless.md)
+  build and send a participant's ballots with the same code
+  (`peersig_proto::participant`): keep it shared. Both review a week
+  before sending it and send nothing while not running.
 - Dedicated observers (`OBS-` codes, docs/observers.md) are published
   without threshold, so they stay apart from participants: no tokens for
   observer codes, no observer reports from participants' codes, and
@@ -44,7 +48,7 @@ product: a change that weakens one is a bug even if every test passes.
 
 ## Building and testing
 
-- `cargo test --locked` covers probe, proto, server, relay and observer. The
+- `cargo test --locked` covers probe, proto, server, relay and headless. The
   server and relay tests run full enroll → issue → OHTTP ballot → release
   cycles; `crates/server/tests/observers.rs` the observers' daily reports.
 - The app (`-p peersig-app`) needs the probe binary in `crates/app/binaries/`

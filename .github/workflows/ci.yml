@@ -26,17 +26,17 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libpcap-dev
       - run: cargo test --locked
-      # The observer's packages: built from debug binaries, installed, checked.
+      # The headless packages: built from debug binaries, installed, checked.
       - if: runner.os == 'Linux'
-        name: Observer packages
+        name: Headless packages
         run: |
           sudo apt-get install -y patchelf
           curl -sSfL -o "$RUNNER_TEMP/nfpm.deb" https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_amd64.deb
           sudo apt-get install -y "$RUNNER_TEMP/nfpm.deb"
-          cargo build --locked -p peersig-probe -p peersig-observer
-          crates/observer/packaging/build.sh target/debug dist 0.0.0
-          sudo apt-get install -y ./dist/peersig-observer_0.0.0_amd64.deb
-          sudo crates/observer/packaging/smoke.sh
+          cargo build --locked -p peersig-probe -p peersig-headless
+          crates/headless/packaging/build.sh target/debug dist 0.0.0
+          sudo apt-get install -y ./dist/peersig-headless_0.0.0_amd64.deb
+          sudo crates/headless/packaging/smoke.sh
 
   app:
     name: App (${{ matrix.os }})

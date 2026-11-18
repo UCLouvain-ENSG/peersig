@@ -19,15 +19,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use peersig_proto::client::Client;
 use peersig_proto::item::{Observed, Skipped};
 use peersig_proto::merge;
-use peersig_proto::plan;
-use peersig_proto::token;
-use peersig_proto::wire::{Ballot, Config, IssueRequest, ObserverReceipt, ObserverReport};
+use peersig_proto::wire::{Ballot, Config, ObserverReceipt, ObserverReport};
 use peersig_proto::{code, EpochSpec, Item};
 
 use crate::local::{self, ProbeStatus};
@@ -302,7 +300,7 @@ impl Core {
         // Leave time to send before the window closes.
         let mut review_until = (now() + self.p.settings.review_hours as i64 * 3600).min(send_by - spread - 3600).max(now());
         // An observer waits for the probe's last records of the day (server
-        // names are written every 5 minutes), as peersig-observer does.
+        // names are written every 5 minutes), as `peersig run` does.
         if cy.observer {
             review_until = review_until.max(cy.spec.start(cy.current) + OBSERVER_AFTER_MIDNIGHT);
         }
@@ -428,36 +426,13 @@ pub fn observed(core: &mut Core, day: u32, real: Vec<Item>) {
     r.error = None;
 }
 
-/// Builds the ballots of `epoch` and its tokens. Runs without the core
-/// lock: it talks to the server.
-pub struct Prepared {
-    pub real: Vec<Item>,
-    pub plan: plan::Plan,
-    pub tokens: Vec<peersig_proto::Token>,
-    pub key_id: String,
-}
+pub use peersig_proto::participant::Prepared;
 
+/// Builds the ballots of `cfg.report_epoch` and their tokens
+/// (`peersig_proto::participant`). Runs without the core lock: it talks to
+/// the server.
 pub async fn prepare(settings: &Settings, cfg: &Config, real: Vec<Item>) -> Result<Prepared> {
-    let e = cfg.report_epoch;
-    let mut client = settings.client()?;
-    // Fetched anonymously: the same key everyone gets.
-    let fresh = client.config().await.context("configuration")?;
-    if fresh.report_epoch != e || fresh.token_key != cfg.token_key {
-        bail!("the server's configuration changed; will retry");
-    }
-    let budget = cfg.tokens_per_epoch as usize;
-    let pl = plan::plan(e, &real, settings.share_domains, budget, &mut || rand::random::<f64>());
-    // Always the full budget: the server must not learn how many items we have.
-    let blinded = token::blind(&cfg.token_key.public_key, e, budget)?;
-    let resp = client
-        .issue(&IssueRequest { code: settings.code.clone(), epoch: e, blinded: blinded.iter().map(|b| b.blind_message.clone()).collect() })
-        .await
-        .context("tokens")?;
-    // Checks every signature against the key fetched anonymously.
-    let tokens = token::finalize(&cfg.token_key.public_key, &blinded, &resp.signatures)?;
-    let real_keys: BTreeSet<String> = real.iter().map(Item::key).collect();
-    let real_sent = pl.ballots.iter().filter(|i| real_keys.contains(&i.key())).cloned().collect();
-    Ok(Prepared { real: real_sent, plan: pl, tokens, key_id: resp.key_id })
+    peersig_proto::participant::prepare(&mut settings.client()?, &settings.code, settings.share_domains, cfg, real).await
 }
 
 /// Installs prepared ballots into the report, each at a random time.

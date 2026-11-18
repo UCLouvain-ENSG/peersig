@@ -14,6 +14,8 @@
 //! - [`code`]: enrollment codes, and how to tell an observer's.
 //! - [`logs`]: reads the probe's daily logs into one period's items.
 //! - `client` (feature `client`): the HTTP client used by the app.
+//! - `participant` (feature `client`): a week's ballots and their tokens,
+//!   for the app and the headless `peersig`.
 
 pub mod b64;
 pub mod code;
@@ -28,6 +30,8 @@ pub mod wire;
 
 #[cfg(feature = "client")]
 pub mod client;
+#[cfg(feature = "client")]
+pub mod participant;
 
 pub use epoch::EpochSpec;
 pub use item::{AppRef, Class, Item};

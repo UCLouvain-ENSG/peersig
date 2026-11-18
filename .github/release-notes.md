@@ -5,8 +5,8 @@ First get an enrollment code at https://peersig.org (in one click from the UCLou
 - **macOS** (12 or newer): `PeerSig_<version>_aarch64.dmg` for Apple Silicon, `_x64.dmg` for Intel. Drag PeerSig to Applications and open it. The builds are not signed yet: the first time, open *System Settings → Privacy & Security* and choose *Open Anyway*. PeerSig then installs its capture service (it asks for an administrator password).
 - **Linux** (x86_64): install the `.deb` (Debian, Ubuntu) or the `.rpm` (Fedora, RHEL, openSUSE): the package gives the probe its capture rights. The AppImage runs the app but cannot give the probe those rights.
 - **Windows** (10 and 11, x64; preview): install the `.msi`. PeerSig installs its capture service (Windows asks for an administrator's consent); it uses the packet capture built into Windows, so nothing else is needed. The builds are not signed yet: SmartScreen asks before running them.
-- **Linux server, dedicated observer** (x86_64, systemd; needs an `OBS-` code from the study team): install `peersig-observer_<version>_amd64.deb` or `peersig-observer-<version>-1.x86_64.rpm`, then run `sudo peersig-observer configure`. See `docs/observers.md`.
-- **Collection server, relay, probe, observer** (Linux x86_64): `peersig-<version>-linux-x86_64.tar.gz`. See `docs/deploy.md`.
+- **Linux server** (x86_64, systemd; no desktop needed): install `peersig-headless_<version>_amd64.deb` or `peersig-headless-<version>-1.x86_64.rpm`, then run `sudo peersig configure` with your code. Each week's list is reviewed with `sudo peersig items`. See `docs/headless.md`.
+- **Collection server, relay, probe, `peersig`** (Linux x86_64): `peersig-<version>-linux-x86_64.tar.gz`. See `docs/deploy.md`.
 
 Check downloads against `SHA256SUMS`.
 
@@ -14,4 +14,4 @@ Check downloads against `SHA256SUMS`.
 
 Once a week, after a day for you to review it: which applications (name, bundle id, version, signing team, kind, engine) sent which TLS fingerprint (JA4) on which OS family, and, if you allow it, the server names (SNI) non-browser applications connected to, as anonymous ballots. Builds of one version line go as one (`2.1.*`). Never addresses, sites visited, times, paths or names. See `docs/privacy.md`.
 
-Dedicated observers (machines run for the study, enrolled with an `OBS-` code from the study team) report daily instead, not anonymously, and are published without threshold: see `docs/observers.md`.
+Dedicated observers (machines run for the study, on any system, with an `OBS-` code from the study team) report daily instead, not anonymously, and are published without threshold: see `docs/observers.md`.

@@ -15,8 +15,8 @@ pub const PATH_RELEASED: &str = "/v1/released";
 pub const PATH_OHTTP: &str = "/ohttp";
 pub const PATH_OHTTP_KEYS: &str = "/ohttp-keys";
 pub const PATH_OBSERVE: &str = "/v1/observe";
-/// Which observer a code is, and when it last reported (`ObserverCheck`).
-pub const PATH_OBSERVER: &str = "/v1/observer";
+/// What a code is: a participant's or an observer's (`CodeCheck`).
+pub const PATH_CODE: &str = "/v1/code";
 /// The observers' daily table: the list of days, and `/<YYYY-MM-DD>` for one.
 pub const PATH_OBSERVED: &str = "/v1/released/observers";
 
@@ -118,17 +118,22 @@ pub struct ObserverReceipt {
     pub items: usize,
 }
 
-/// Asks the server which observer a code is (`peersig-observer configure`
-/// and `status`).
+/// Asks the server what a code is (`peersig configure` and `status`),
+/// directly, as token issuance does. 403 for an unknown or withdrawn code.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ObserverCheck {
+pub struct CodeCheck {
     pub code: String,
 }
 
+/// A participant's code: `observer` false, nothing else (its ballots are
+/// anonymous). An observer's: its label and its reports.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ObserverStatus {
-    pub label: String,
-    /// Days reported so far.
+pub struct CodeInfo {
+    pub observer: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Days reported so far (observers).
+    #[serde(default)]
     pub days: u32,
     /// The last day reported, YYYY-MM-DD (UTC).
     #[serde(default, skip_serializing_if = "Option::is_none")]

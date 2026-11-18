@@ -13,6 +13,10 @@ may be published. It runs the same probe as a participant, but:
 - its items keep their exact versions and server names: they are not
   merged into `2.1.*` or `p*-fmip.icloud.com` as a participant's are.
 
+Being an observer is a matter of the code alone, not of how PeerSig runs:
+the app on macOS, Windows or Linux, or `peersig` on a server
+([headless.md](headless.md)) each become an observer with an `OBS-` code.
+
 Never give an observer code to a participant, and do not use one on a
 computer someone uses for anything personal. On a shared machine, tell its
 users that the applications they run (and, if sharing is on, the server
@@ -41,85 +45,16 @@ an observer's report, and an observer's code gets no ballot tokens: the
 two kinds never mix, so observers never help a participant's item reach
 *k*.
 
-## On a Linux server
+## On a server
 
-For a machine without a desktop, or one that should not need one, install
-the `peersig-observer` package (x86_64, systemd): the probe, the
-`peersig-observer` command and two services. It is on the
-[Participate](https://peersig.org/participate#server) page (*Linux
-server*) and in each release.
-
-```sh
-sudo apt install ./peersig-observer_*_amd64.deb      # Debian, Ubuntu
-sudo dnf install ./peersig-observer-*.x86_64.rpm      # Fedora, RHEL (zypper on openSUSE)
-sudo peersig-observer configure
-```
-
-`configure` asks for the observer code and whether to share server
-names, checks the code with the server, writes `/etc/peersig/observer.conf`
-and starts the services. Without a terminal, pass what it would ask:
-`sudo peersig-observer configure --code OBS-K7QF-2M9D-XW4P --share-domains`
-(or `--no-share-domains`). Run it again to change a setting; `--server`
-changes the collection server (default `https://peersig.org`).
-
-```sh
-sudo peersig-observer status        # settings, the code's observer and last report, the probe, the services
-journalctl -u peersig-observer      # "2026-11-18: reported 412 items as O03"
-```
-
-What the package installs:
-
-- `peersig-probe.service`: the probe, as the system user `peersig`, with
-  the capabilities it needs to capture and to find the process behind
-  each connection (`CAP_NET_RAW`, `CAP_NET_ADMIN`, `CAP_DAC_READ_SEARCH`,
-  `CAP_SYS_PTRACE`), not as root. It writes one `peersig-<date>.jsonl` per
-  day in `/var/lib/peersig/logs`, readable by `peersig` only, and deletes
-  them after 14 days.
-- `peersig-observer.service`: reads those logs and reports each day at
-  about 00:15 UTC, retrying every 10 minutes while the server cannot be
-  reached. It starts only once `/etc/peersig/observer.conf` exists, and
-  pulls in the probe.
-- `/etc/peersig/observer.conf`, written by `configure`: `KEY=VALUE` lines
-  (`PEERSIG_SERVER`, `PEERSIG_CODE`, `PEERSIG_SHARE_DOMAINS`,
-  `PEERSIG_LOGS`), readable by root and the `peersig` group only, since
-  the code lets whoever holds it report as this observer.
-
-Removing the package stops both services and keeps the settings and logs;
-`apt purge` deletes them too.
-
-Every `peersig-observer` command reads the settings file first; options
-and environment variables of the same names override it. As root or as
-`peersig` (the logs are theirs only):
-
-```sh
-sudo peersig-observer items                        # yesterday's items, as a table
-sudo peersig-observer items --day today --json     # exactly what would be sent
-sudo peersig-observer report                       # send yesterday now
-sudo peersig-observer report --day 2026-11-15      # a day that was missed
-```
-
-A day is counted once per observer: sending it again is answered "already
-reported". The server accepts a day for 7 days after it ends, so a machine
-that was offline can catch up with `report --day`. A day with no items in
-the logs (the probe was not running) is not sent. Browsers' server names
-are never sent.
-
-### Without the package
-
-The release's `peersig-v<version>-linux-x86_64.tar.gz` has the same two
-programs (or `cargo build --release -p peersig-probe -p peersig-observer`;
-the probe needs `libpcap-dev`). Run the probe as root, or with the
-capabilities above, and `peersig-observer` as the user that owns the logs:
-
-```sh
-sudo peersig-probe run --dir /var/lib/peersig/logs --owner peersig --quiet
-sudo peersig-observer --config /etc/peersig/observer.conf configure --no-start
-sudo -u peersig peersig-observer run
-```
-
-`crates/observer/packaging/` has the package's units, to copy. On macOS,
-run the probe as root the same way (or let the app install it), and
-`peersig-observer` as the user that owns the logs.
+Install the `peersig-headless` package and run `sudo peersig configure`
+with the observer code: see [headless.md](headless.md). The service then
+reports each day at about 00:15 UTC, retrying every 10 minutes while the
+server cannot be reached; `sudo peersig report --day 2026-11-15` sends a
+day it missed (the server accepts a day for 7 days after it ends). A day
+is counted once per observer: sending it again is answered "already
+reported". A day with no items in the logs (the probe was not running) is
+not sent.
 
 ## With the app
 

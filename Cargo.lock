@@ -3763,7 +3763,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "peersig-observer"
+name = "peersig-headless"
 version = "0.1.6"
 dependencies = [
  "anyhow",
@@ -3772,6 +3772,9 @@ dependencies = [
  "clap",
  "peersig-proto",
  "peersig-server",
+ "rand 0.10.4",
+ "rusqlite",
+ "serde",
  "serde_json",
  "tokio",
 ]

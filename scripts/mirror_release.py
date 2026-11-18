@@ -30,9 +30,9 @@ KINDS = {
     "linux-deb": ("PeerSig", "_amd64.deb", "PeerSig-linux-amd64.deb"),
     "linux-rpm": ("PeerSig", ".x86_64.rpm", "PeerSig-linux-x86_64.rpm"),
     "linux-appimage": ("PeerSig", "_amd64.AppImage", "PeerSig-linux-x86_64.AppImage"),
-    # The headless dedicated observer (docs/observers.md).
-    "observer-deb": ("peersig-observer_", "_amd64.deb", "peersig-observer-amd64.deb"),
-    "observer-rpm": ("peersig-observer-", ".x86_64.rpm", "peersig-observer-x86_64.rpm"),
+    # Without a desktop, for servers (docs/headless.md).
+    "headless-deb": ("peersig-headless_", "_amd64.deb", "peersig-headless-amd64.deb"),
+    "headless-rpm": ("peersig-headless-", ".x86_64.rpm", "peersig-headless-x86_64.rpm"),
 }
 
 

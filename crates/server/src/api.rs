@@ -195,21 +195,22 @@ pub fn observe(s: &State, body: &[u8]) -> Reply {
     }
 }
 
-/// Which observer a code is, and when it last reported. 403 for any
-/// other code, as `observe` answers.
-pub fn observer_status(s: &State, body: &[u8]) -> Reply {
-    let Ok(r) = serde_json::from_slice::<ObserverCheck>(body) else { return err(400, "malformed request") };
+/// What a code is, for `peersig configure`: a participant's (nothing
+/// more: not its label), or an observer's with its label and last report.
+/// 403 for an unknown or withdrawn code, as issuance answers.
+pub fn code_info(s: &State, body: &[u8]) -> Reply {
+    let Ok(r) = serde_json::from_slice::<CodeCheck>(body) else { return err(400, "malformed request") };
     let hash = db::code_hash(&r.code);
     let db = s.db.lock().unwrap();
     let label = match db::code_status(&db, &hash) {
         Ok(Some(c)) if !c.active => return err(403, "this enrollment code was withdrawn"),
-        Ok(Some(c)) if !c.observer => return err(403, "not a dedicated observer's code"),
+        Ok(Some(c)) if !c.observer => return json(200, &CodeInfo { observer: false, label: None, days: 0, last_day: None }),
         Ok(Some(c)) => c.label,
         Ok(None) => return err(403, "unknown enrollment code"),
         Err(e) => return internal(e),
     };
     match db::observer_reports(&db, &hash) {
-        Ok((days, last)) => json(200, &ObserverStatus { label, days, last_day: last.map(|d| day_name(s, d)) }),
+        Ok((days, last)) => json(200, &CodeInfo { observer: true, label: Some(label), days, last_day: last.map(|d| day_name(s, d)) }),
         Err(e) => internal(e),
     }
 }
@@ -291,7 +292,7 @@ pub fn router(state: Arc<State>) -> Router {
         )
         .route(PATH_OHTTP, post(ohttp_h))
         .route(PATH_OBSERVED, get(|AxState(s): AxState<Arc<State>>| blocking(move || observed_days(&s))))
-        .route(PATH_OBSERVER, post(|AxState(s): AxState<Arc<State>>, body: Bytes| blocking(move || observer_status(&s, &body))))
+        .route(PATH_CODE, post(|AxState(s): AxState<Arc<State>>, body: Bytes| blocking(move || code_info(&s, &body))))
         .route(
             &format!("{}/{{day}}", PATH_OBSERVED),
             get(|AxState(s): AxState<Arc<State>>, Path(day): Path<String>| blocking(move || observed_day(&s, &day))),

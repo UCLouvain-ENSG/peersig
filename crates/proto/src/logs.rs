@@ -1,6 +1,6 @@
 //! The probe's daily logs (`peersig-<YYYYMMDD>.jsonl` in its directory),
 //! read into the items of one period: a week for a participant, a day for
-//! an observer. Used by the app and by `peersig-observer`.
+//! an observer. Used by the app and by the headless `peersig`.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};

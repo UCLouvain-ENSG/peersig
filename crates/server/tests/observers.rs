@@ -65,13 +65,13 @@ async fn observers_report_daily_and_are_published_without_threshold() {
     // A late day, within the window.
     c.observe(&report(&o2, 3, vec![b.clone()])).await.unwrap().expect("late day counted");
 
-    // Which observer a code is, as `peersig-observer configure` asks.
-    let st = c.observer_status(&o1.to_lowercase()).await.unwrap();
-    assert_eq!((st.label.as_str(), st.days, st.last_day.as_deref()), ("O01", 1, Some("1970-01-10")));
-    assert_eq!(c.observer_status(&o2).await.unwrap().days, 2, "day 9 and a late day 3");
-    for (code, why) in [(p1.as_str(), "not a dedicated observer"), ("OBS-AAAA-BBBB-CCCC", "unknown")] {
-        assert!(c.observer_status(code).await.unwrap_err().to_string().contains(why));
-    }
+    // What a code is, as `peersig configure` asks.
+    let st = c.code_info(&o1.to_lowercase()).await.unwrap();
+    assert_eq!((st.observer, st.label.as_deref(), st.days, st.last_day.as_deref()), (true, Some("O01"), 1, Some("1970-01-10")));
+    assert_eq!(c.code_info(&o2).await.unwrap().days, 2, "day 9 and a late day 3");
+    let p = c.code_info(&p1).await.unwrap();
+    assert!(!p.observer && p.label.is_none(), "a participant's code says nothing more");
+    assert!(c.code_info("OBS-AAAA-BBBB-CCCC").await.unwrap_err().to_string().contains("unknown"));
 
     // Refusals.
     let e = |r: anyhow::Result<_>| r.map(|_: Option<_>| ()).unwrap_err().to_string();
