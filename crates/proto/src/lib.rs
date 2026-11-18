@@ -16,6 +16,7 @@
 pub mod b64;
 pub mod epoch;
 pub mod item;
+pub mod merge;
 pub mod oblivious;
 pub mod plan;
 pub mod token;

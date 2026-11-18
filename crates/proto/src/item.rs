@@ -207,7 +207,8 @@ pub fn is_ja4(s: &str) -> bool {
 
 /// Lower-cases a name, drops the ones that are local or addresses, and
 /// replaces random-looking labels (CDN shards, session hashes) by `*`. The
-/// last two labels are kept. None when the name must not be reported.
+/// last two labels are kept. A label with a `*` in it (`p*-fmip`, from
+/// `crate::merge`) stays as it is. None when the name must not be reported.
 pub fn normalize_domain(name: &str) -> Option<String> {
     let n = name.trim().trim_end_matches('.').to_ascii_lowercase();
     if n.len() > 253 || !n.contains('.') || n.starts_with('.') {
@@ -241,8 +242,11 @@ fn looks_random(label: &str) -> bool {
     if label == "*" {
         return true;
     }
+    // A label merged around its random part (`p*-fmip`, crate::merge) is
+    // kept unless what is left looks random too.
     if label.contains('*') {
-        return true;
+        let rest: String = label.chars().filter(|c| *c != '*').collect();
+        return rest.is_empty() || looks_random(&rest);
     }
     let digits = label.bytes().filter(u8::is_ascii_digit).count();
     let hex = label.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
@@ -257,8 +261,8 @@ pub fn os_label(os: &Value) -> Option<String> {
     check_os(&s).ok().map(|_| s)
 }
 
-/// An item seen locally. `count`, `first`, `last` and `procs` are shown to
-/// the participant and never sent.
+/// An item seen locally. `count`, `first`, `last`, `procs` and `merged`
+/// are shown to the participant and never sent.
 #[derive(Serialize, Clone, Debug)]
 pub struct Observed {
     pub key: String,
@@ -267,6 +271,9 @@ pub struct Observed {
     pub first: i64,
     pub last: i64,
     pub procs: BTreeSet<String>,
+    /// Labels of the items merged into this one (`crate::merge`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub merged: Vec<String>,
 }
 
 /// What was left out, so the app can say so.
@@ -343,6 +350,7 @@ impl Collector {
             first: t,
             last: t,
             procs: BTreeSet::new(),
+            merged: Vec::new(),
         });
         e.count += n;
         e.first = e.first.min(t);
@@ -484,6 +492,9 @@ mod tests {
         assert_eq!(normalize_domain("r3---sn-4g5e6nsz.googlevideo.com").as_deref(), Some("*.googlevideo.com"));
         assert_eq!(normalize_domain("eu-v20.events.data.microsoft.com").as_deref(), Some("eu-v20.events.data.microsoft.com"));
         assert_eq!(normalize_domain("3f2a9c81d0e4.cloudfront.net").as_deref(), Some("*.cloudfront.net"));
+        assert_eq!(normalize_domain("p*-fmip.icloud.com").as_deref(), Some("p*-fmip.icloud.com"));
+        assert_eq!(normalize_domain("a1b2c3d4e5*.example.com").as_deref(), Some("*.example.com"));
+        assert_eq!(normalize_domain("p*-fmip.icloud.*"), None);
         for private in ["printer.local", "nas.lan", "1.0.0.10.in-addr.arpa", "10.0.0.1", "localhost", "router", "x.y.internal"] {
             assert_eq!(normalize_domain(private), None, "{}", private);
         }

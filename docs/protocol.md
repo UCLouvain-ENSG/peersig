@@ -89,9 +89,22 @@ already sent.
 The server parses the item (unknown fields are rejected), validates it
 (`Item::validate`), and counts its canonical serialization.
 
+Before the review, the app merges items that are equal except for a detail
+(`crates/proto/src/merge.rs`), when there are two or more of them. A
+version number with three components or more, in `app.name`,
+`app.version` or `app.engine`, keeps major.minor and ends in `*`
+(`2.1.322` and `2.1.326` give `2.1.*`). In a domain, a run of a digit then
+hex digits left of the last two labels becomes `*` (`p177-fmip.icloud.com`
+and `p63-fmip.icloud.com` give `p*-fmip.icloud.com`). Merged items validate
+like any other; `normalize_domain` keeps a label with a `*` unless what is
+left of it looks random. Servers before this change (0.1.4 and earlier)
+refuse such a label.
+
 ## A week, from the app's side
 
-1. At the start of epoch *c*, open the report of *c − 1* for review.
+1. At the start of epoch *c*, open the report of *c − 1* for review, with
+   near-identical items merged (see Ballots). An item the participant
+   removes is never merged into another.
 2. After the review: fetch the config through OHTTP; build the ballots
    (`plan::plan`): every item the participant kept, once, and one presence
    ballot, shuffled, capped at the budget.

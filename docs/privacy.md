@@ -37,6 +37,14 @@ Items (`crates/proto/src/item.rs`), at most once per item and week:
 - `presence`: "one participant reported this week", and whether it shares
   domains.
 
+Before the review, items that differ only in a detail are merged, with the
+detail replaced by `*`: the components after major.minor of a version
+(in the name, version or engine: `2.1.322` and `2.1.326` give `2.1.*`),
+and in a server name, a run of a digit then hex digits left of the last
+two labels (`p177-fmip.icloud.com` and `p63-fmip.icloud.com` give
+`p*-fmip.icloud.com`). Only items equal in everything else merge, and
+only two or more; an item the participant removed stays out of merges.
+
 Item parsing refuses unknown fields, so a ballot cannot carry more than
 this. Handshakes with no identified application are not sent.
 

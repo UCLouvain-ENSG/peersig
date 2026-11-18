@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use peersig_proto::client::Client;
 use peersig_proto::item::{Observed, Skipped};
+use peersig_proto::merge;
 use peersig_proto::plan;
 use peersig_proto::token;
 use peersig_proto::wire::{Ballot, Config, IssueRequest};
@@ -223,11 +224,13 @@ impl Core {
         }
     }
 
-    /// Items of an epoch, as the participant sees them.
+    /// Items of an epoch, as the participant sees them: near-identical
+    /// items merged, except those the participant removed.
     pub fn items(&mut self, epoch: u32) -> Option<(Vec<Observed>, Skipped)> {
         let spec = self.config.as_ref()?.1.epochs;
         let s = &self.p.settings;
-        Some(self.cache.get(&s.logs(), spec, epoch, s.share_domains))
+        let (items, skipped) = self.cache.get(&s.logs(), spec, epoch, s.share_domains);
+        Some((merge::merge(items, &self.p.excluded), skipped))
     }
 
     /// Opens the report of the current reporting epoch if none exists.
