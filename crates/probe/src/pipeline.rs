@@ -301,6 +301,7 @@ impl Pipeline {
             "dns_responses": self.dns.responses,
             "domain_entries": self.domains.len(),
             "process_lookups": self.resolver.lookups,
+            "not_local": self.resolver.not_local,
             "pending": self.tracker.pending_len(),
             "capture": extra,
         })

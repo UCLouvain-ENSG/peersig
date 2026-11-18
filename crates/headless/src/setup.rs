@@ -42,7 +42,7 @@ pub struct ConfigureArgs {
 /// What leaves the machine, shown before it agrees.
 fn terms(observer: bool, share: bool, review_hours: u32) -> String {
     let what = format!(
-        "which applications (name, bundle id, version, signing team, kind, engine) sent which TLS fingerprint (JA4), and the OS family{}",
+        "which applications (name, bundle id, version, signing team, kind, engine) sent which TLS fingerprint (JA4), and the distribution with its major release (linux debian 12){}",
         if share { "; and the server names (SNI) non-browser applications connect to, each with its JA4" } else { "" }
     );
     if observer {
@@ -260,6 +260,11 @@ pub async fn status(o: &Opts, loaded: &Loaded) -> Result<()> {
     }
     println!("probe          {}", probe_status(&o.logs));
     if logs_readable(&o.logs) {
+        match peersig_proto::logs::system(&o.logs) {
+            Some(Ok(os)) => println!("system         {}: sent with each item", os),
+            Some(Err(raw)) => println!("system         not recognised ({}): no handshake can become an item", raw),
+            None => {}
+        }
         if let Ok(cfg) = o.config().await {
             if observer {
                 let days = cfg.epochs.days();

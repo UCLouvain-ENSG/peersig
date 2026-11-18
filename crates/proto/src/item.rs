@@ -61,7 +61,8 @@ impl Class {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Item {
     Hello {
-        /// "macos 27": family and major version only.
+        /// "macos 27", "windows 11": the system and its major version only;
+        /// on Linux the distribution's ("linux ubuntu 24", `os_label`).
         os: String,
         /// tcp, quic or dtls.
         transport: String,
@@ -257,9 +258,40 @@ fn looks_random(label: &str) -> bool {
 /// "macos 27" from the probe's `start` record `os` object.
 pub fn os_label(os: &Value) -> Option<String> {
     let family = os.get("os")?.as_str()?.to_ascii_lowercase();
-    let major = os.get("version").and_then(|v| v.as_str()).and_then(|v| v.split('.').next()).unwrap_or("");
-    let s = if major.is_empty() { family } else { format!("{} {}", family, major) };
+    let s = if family == "linux" {
+        linux_label(os)
+    } else {
+        let major = os.get("version").and_then(|v| v.as_str()).and_then(|v| v.split('.').next()).unwrap_or("");
+        if major.is_empty() { family } else { format!("{} {}", family, major) }
+    };
     check_os(&s).ok().map(|_| s)
+}
+
+/// Linux has no version of its own: "linux ubuntu 24", the distribution
+/// and its major release, from what the probe records of os-release:
+/// `distro` (`ID`) and `build` (`VERSION_ID`). Probes before 0.1.8 did not
+/// record `ID`; the first word of `version` (`PRETTY_NAME`, "Ubuntu
+/// 24.04.3 LTS") stands in for it. A release that is a date (rolling
+/// distributions) is left out.
+fn linux_label(os: &Value) -> String {
+    let field = |k: &str| os.get(k).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+    let name = match field("distro") {
+        Some(id) => id.to_string(),
+        None => field("version").and_then(|p| p.split_whitespace().next()).unwrap_or("").to_string(),
+    };
+    let name: String = name.to_ascii_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect();
+    let name: String = name.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(20).collect();
+    let name = name.trim_end();
+    if name.is_empty() || name == "linux" {
+        return "linux".into();
+    }
+    let release = field("build")
+        .and_then(|b| b.split('.').next())
+        .filter(|m| !m.is_empty() && m.len() <= 4 && m.bytes().all(|b| b.is_ascii_digit()));
+    match release {
+        Some(r) => format!("linux {} {}", name, r),
+        None => format!("linux {}", name),
+    }
 }
 
 /// An item seen locally. `count`, `first`, `last`, `procs` and `merged`
@@ -528,6 +560,46 @@ mod tests {
             assert!(!k.contains(leaked), "{} in {}", leaked, k);
         }
         assert_eq!((skipped.unattributed, skipped.browser_domains, skipped.domains_off), (1, 1, 1));
+    }
+
+    /// Linux labels, from os-release as the probe records it (0.1.8 adds
+    /// `distro`; before, only the pretty name and `VERSION_ID`).
+    #[test]
+    fn linux_labels() {
+        let cases = [
+            (json!({"os":"linux","distro":"ubuntu","version":"Ubuntu 24.04.3 LTS","build":"24.04"}), "linux ubuntu 24"),
+            (json!({"os":"linux","version":"Ubuntu 24.04.3 LTS","build":"24.04","kernel":"7.0.0-38-generic"}), "linux ubuntu 24"),
+            (json!({"os":"linux","distro":"debian","version":"Debian GNU/Linux 12 (bookworm)","build":"12"}), "linux debian 12"),
+            (json!({"os":"linux","version":"Debian GNU/Linux 12 (bookworm)","build":"12"}), "linux debian 12"),
+            (json!({"os":"linux","distro":"fedora","version":"Fedora Linux 41 (Server Edition)","build":"41"}), "linux fedora 41"),
+            (json!({"os":"linux","distro":"rhel","version":"Red Hat Enterprise Linux 9.4 (Plow)","build":"9.4"}), "linux rhel 9"),
+            (json!({"os":"linux","distro":"arch","version":"Arch Linux"}), "linux arch"),
+            (json!({"os":"linux","distro":"opensuse-tumbleweed","version":"openSUSE Tumbleweed","build":"20261117"}), "linux opensuse tumbleweed"),
+            (json!({"os":"linux","distro":"linuxmint","version":"Linux Mint 22.1","build":"22.1"}), "linux linuxmint 22"),
+            (json!({"os":"linux","version":"Linux Mint 22.1","build":"22.1"}), "linux"),
+            (json!({"os":"linux"}), "linux"),
+            (json!({"os":"macos","version":"27.0.1","build":"26A434"}), "macos 27"),
+            (json!({"os":"windows","version":"11","build":"26100.2314"}), "windows 11"),
+        ];
+        for (os, want) in cases {
+            assert_eq!(os_label(&os).as_deref(), Some(want), "{}", os);
+        }
+    }
+
+    /// Every ClientHello was dropped on Linux before 0.1.8: the pretty
+    /// name made a label the check refused, so there was no OS.
+    #[test]
+    fn collect_on_linux() {
+        let spec = EpochSpec { origin: 0, length: EpochSpec::DAY };
+        let t = "2026-11-18T13:26:49.969161Z";
+        let e = spec.at(chrono::DateTime::parse_from_rfc3339(t).unwrap().timestamp()).unwrap();
+        let mut c = Collector::new(spec, e, false);
+        c.record(&json!({"type":"start","os":{"arch":"x86_64","build":"24.04","kernel":"7.0.0-38-generic","model":null,"os":"linux","version":"Ubuntu 24.04.3 LTS"}}));
+        c.record(&json!({"type":"hello","ts":t,"transport":"tcp","ja4":"t13d1517h2_8daaf6152771_e6dcd7ae0a9e","proc":"clickhouse",
+            "attribution":"socket-table","app":{"kind":"system","name":"clickhouse","path":"/usr/bin/clickhouse","via":"self"}}));
+        let (items, _) = c.finish();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].key.contains(r#""os":"linux ubuntu 24""#), "{}", items[0].key);
     }
 
     /// Shared names: those a ClientHello carried, once per JA4; names seen

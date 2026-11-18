@@ -567,6 +567,7 @@ pub fn os_info() -> OsInfo {
     };
     OsInfo {
         os: os.into(),
+        distro: None,
         version,
         build: ok.then(|| match reg_dword(CURRENT, "UBR") {
             Some(ubr) => format!("{}.{}", v.dwBuildNumber, ubr),

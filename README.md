@@ -21,8 +21,8 @@ of dots: each dot is one participant's anonymous ballot.
 
 What leaves a participant's computer, and only after they could review it:
 
-- per week, each *(application name and version, kind, engine, OS family,
-  transport, JA4)* seen;
+- per week, each *(application name and version, kind, engine, system and
+  its major version, transport, JA4)* seen;
 - if they opt in, the server names (SNI) that **non-browser** applications
   connected to, each with the JA4 of that connection (Teams sending
   `t13d1516h2_…` to `teams.microsoft.com`). Browsers' names are never

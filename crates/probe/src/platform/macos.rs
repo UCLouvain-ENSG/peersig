@@ -227,6 +227,7 @@ fn sysctl_string(name: &str) -> Option<String> {
 pub fn os_info() -> OsInfo {
     OsInfo {
         os: "macos".into(),
+        distro: None,
         version: sysctl_string("kern.osproductversion"),
         build: sysctl_string("kern.osversion"),
         kernel: sysctl_string("kern.osrelease"),

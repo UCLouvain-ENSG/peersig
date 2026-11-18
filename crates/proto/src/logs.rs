@@ -25,6 +25,24 @@ pub fn files(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// The system the latest `start` record names, as items carry it:
+/// `Ok("linux debian 12")`, or `Err(what the probe recorded)` when no
+/// label can be made of it, and then no ClientHello becomes an item.
+/// `None` before the probe has written a record.
+pub fn system(dir: &Path) -> Option<Result<String, String>> {
+    let f = File::open(files(dir).pop()?).ok()?;
+    let mut os = None;
+    for line in BufReader::new(f).lines().map_while(Result::ok) {
+        if line.contains(r#""type":"start""#) {
+            if let Some(v) = serde_json::from_str::<Value>(&line).ok().and_then(|v| v.get("os").cloned()) {
+                os = Some(v);
+            }
+        }
+    }
+    let os = os?;
+    Some(crate::item::os_label(&os).ok_or_else(|| os.to_string()))
+}
+
 /// Items of `epoch` found in the logs. Files are read whole, in order, so
 /// each `hello` follows the `start` record that gives the OS (the probe
 /// writes one at the top of every daily file).

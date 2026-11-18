@@ -20,8 +20,10 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -307,9 +309,14 @@ pub struct Resolver {
     exes: HashMap<String, Arc<ExeInfo>>,
     procs: HashMap<i32, Arc<Process>>,
     socket_cache: HashMap<FlowKey, Option<i32>>,
+    /// This machine's addresses, and when they were listed.
+    own: Option<(Instant, HashSet<IpAddr>)>,
     /// Query live processes (false when reading a capture file).
     pub live: bool,
     pub lookups: u64,
+    /// ClientHellos from an address that is not this machine's: forwarded
+    /// or bridged, so no local process sent them.
+    pub not_local: u64,
 }
 
 impl Resolver {
@@ -320,8 +327,10 @@ impl Resolver {
             exes: HashMap::new(),
             procs: HashMap::new(),
             socket_cache: HashMap::new(),
+            own: None,
             live,
             lookups: 0,
+            not_local: 0,
         }
     }
 
@@ -446,6 +455,25 @@ impl Resolver {
         self.process(pid).or_else(|| Some(Arc::new(Process::stub(format!("{}@?", pid), pid, comm))))
     }
 
+    /// Whether `ip` is one of this machine's addresses: only then can a
+    /// local socket have sent the packet. Without this check, a forwarded
+    /// ClientHello whose port matched a local socket's was credited to that
+    /// socket's process. The list is read again for an address not in it,
+    /// at most every 5 seconds: addresses come and go (DHCP, temporary IPv6).
+    fn is_own(&mut self, ip: IpAddr) -> bool {
+        let ip = platform::canonical(ip);
+        if ip.is_loopback() || self.own.as_ref().is_some_and(|(_, s)| s.contains(&ip)) {
+            return true;
+        }
+        if self.own.as_ref().map_or(true, |(t, _)| t.elapsed() >= Duration::from_secs(5)) {
+            match platform::local_addrs() {
+                Some(s) => self.own = Some((Instant::now(), s)),
+                None => return true,
+            }
+        }
+        self.own.as_ref().map_or(true, |(_, s)| s.contains(&ip))
+    }
+
     pub fn attribute(&mut self, meta: Option<&PktapMeta>, key: &FlowKey) -> Attribution {
         let (source, proc, eproc) = match meta {
             Some(m) if m.pid > 0 || !m.comm.is_empty() => {
@@ -456,6 +484,10 @@ impl Resolver {
                     None
                 };
                 (if self.live { "pktap" } else { "pktap-offline" }, proc, eproc)
+            }
+            _ if self.live && !self.is_own(key.src) => {
+                self.not_local += 1;
+                ("none", None, None)
             }
             _ if self.live => {
                 let pid = match self.socket_cache.get(key) {

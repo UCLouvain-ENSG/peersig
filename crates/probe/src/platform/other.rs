@@ -25,6 +25,7 @@ pub fn socket_owner(_key: &FlowKey) -> Option<i32> {
 pub fn os_info() -> OsInfo {
     OsInfo {
         os: std::env::consts::OS.into(),
+        distro: None,
         version: None,
         build: None,
         kernel: None,

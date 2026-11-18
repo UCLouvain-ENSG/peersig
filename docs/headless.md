@@ -35,7 +35,7 @@ The code decides what the machine is:
 ## Every day
 
 ```sh
-sudo peersig status                 # settings, the code, the report under way, the probe, the services
+sudo peersig status                 # settings, code, report under way, probe, system as items name it, services
 sudo peersig items                  # what goes out next: last week (yesterday for an observer)
 sudo peersig items --current        # this week (today) so far
 sudo peersig items --json           # exactly what is sent, one item per line
@@ -66,6 +66,21 @@ and the state belong to the service's user: run the commands with `sudo`.
 - `/etc/peersig/peersig.conf`, written by `configure`: `KEY=VALUE` lines,
   readable by root and the `peersig` group only, since the code lets
   whoever holds it report for this machine.
+
+The probe captures on every interface (`any`). On a machine that forwards
+or bridges other devices' traffic (a router, a Wi-Fi access point, a host
+for virtual machines), it sees their handshakes too: only those sent from
+this machine's own addresses are tied to a process and can become items.
+The others are never sent, but stay in the local logs until they are
+deleted. To keep them out of the logs as well, give the probe a kernel
+filter for this machine's own addresses, with `sudo systemctl edit
+peersig-probe`:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/lib/peersig/peersig-probe run --dir /var/lib/peersig/logs --quiet --bpf "host 192.0.2.10 or host 2001:db8::10"
+```
 
 Nothing is sent while the service is stopped; a week (or, for an
 observer, a day older than 7 days) whose window passed is not sent later.

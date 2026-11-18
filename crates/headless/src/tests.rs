@@ -22,7 +22,7 @@ fn log(dir: &std::path::Path, t: i64, records: &[serde_json::Value]) {
     std::fs::create_dir_all(dir).unwrap();
     let ts = chrono::DateTime::from_timestamp(t, 0).unwrap();
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(dir.join(ts.format("peersig-%Y%m%d.jsonl").to_string())).unwrap();
-    writeln!(f, "{}", serde_json::json!({"type":"start","os":{"os":"linux","version":"6.8.0"}})).unwrap();
+    writeln!(f, "{}", serde_json::json!({"type":"start","os":{"os":"linux","distro":"debian","version":"Debian GNU/Linux 12 (bookworm)","build":"12","kernel":"6.1.0-27-amd64"}})).unwrap();
     for r in records {
         let mut r = r.clone();
         let k = if r["type"] == "domain" { "last" } else { "ts" };

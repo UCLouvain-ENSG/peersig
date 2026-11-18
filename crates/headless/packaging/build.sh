@@ -39,6 +39,9 @@ description: |-
   send them, and reports them to the PeerSig study: weekly as anonymous
   ballots with a participant's code, daily with a dedicated observer's.
   Set it up with: sudo peersig configure
+# 0.1.6's observer-only package installed the same probe unit.
+conflicts: [peersig-observer]
+replaces: [peersig-observer]
 contents:
   - src: $bin/peersig
     dst: /usr/bin/peersig

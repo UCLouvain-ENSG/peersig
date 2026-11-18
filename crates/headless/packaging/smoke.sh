@@ -42,6 +42,10 @@ sleep 4
 kill -9 "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
 grep -q '"type":"start"' /tmp/peersig-smoke/peersig-*.jsonl
+# Items carry the system that record names: a distribution the label
+# cannot be made from would leave every handshake out.
+peersig --logs /tmp/peersig-smoke status > /tmp/status
+grep -E '^system +linux [a-z0-9 ]+: sent with each item$' /tmp/status
 
 if command -v systemd-analyze >/dev/null; then
     systemd-analyze verify /usr/lib/systemd/system/peersig-probe.service /usr/lib/systemd/system/peersig.service

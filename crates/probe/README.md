@@ -95,7 +95,10 @@ One JSON object per line, with these `type`s:
    extension. No socket-table polling is needed, and short-lived processes
    are caught too. When a packet has no process (or on a device other than
    pktap), the socket's owner is looked up once per ClientHello (`lsof` on
-   macOS, procfs on Linux): `attribution` is `socket-table`.
+   macOS, procfs on Linux): `attribution` is `socket-table`. Only for a
+   packet sent from one of the machine's own addresses: what it forwards or
+   bridges (a router, a Wi-Fi access point, virtual machines) has no local
+   process, whatever port it uses (`not_local` in `stats`).
 2. **Process to executable and app.** `proc_pidpath`, `KERN_PROCARGS2` (only
    Chromium's `--type` and an interpreter's script name are kept, never the
    full command line), the bundles around the executable with their
@@ -211,10 +214,11 @@ per (pid, start time).
 The capture, flow and fingerprint code is portable. What is per-OS
 (`src/platform/`):
 
-- **Linux**: no per-packet process. The ClientHello's socket is found
-  through `/proc/net/{tcp,udp}[6]` and `/proc/*/fd`, then
-  `/proc/<pid>/{exe,cmdline,maps}`. It compiles (`cargo check --target
-  x86_64-unknown-linux-gnu`) but has not been run. Next steps: an eBPF probe
+- **Linux**: no per-packet process. The ClientHello's socket is the one in
+  `/proc/net/{tcp,udp}[6]` with its local address (or any) and port, and
+  its peer (UDP: or none), found through `/proc/*/fd`, then
+  `/proc/<pid>/{exe,cmdline,maps}`. Runs in the headless package (Debian,
+  Ubuntu, Fedora). Next steps: an eBPF probe
   on `tcp_connect`/`udp_sendmsg` for the per-packet process, and package
   versions from dpkg/rpm, Flatpak and Snap.
 - **Windows**: see below.
