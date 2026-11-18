@@ -3744,7 +3744,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-app"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -3764,7 +3764,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-observer"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -3778,7 +3778,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-probe"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -3802,7 +3802,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-proto"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3820,7 +3820,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-relay"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -3836,7 +3836,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-server"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
