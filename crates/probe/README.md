@@ -233,8 +233,11 @@ cargo build --release -p peersig-probe
   packets through ETW (Microsoft-Windows-NDIS-PacketCapture) to the trace
   sessions that enable it. The probe runs one real-time session with only
   the send path enabled, so received traffic (downloads) stays in the
-  kernel, as with the outbound filter on macOS. Ethernet and Wi-Fi frames
-  come as Ethernet, mobile broadband and tunnels as raw IP. Packets from
+  kernel, as with the outbound filter on macOS. Ethernet frames come as
+  Ethernet; Wi-Fi adapters whose NDIS medium is Native 802.11 (most of
+  them, outside monitor mode too) log 802.11 data frames with an LLC/SNAP
+  header, which `--save-pcap` keeps as link type 105; mobile broadband and
+  tunnels come as raw IP. Packets from
   adapters without an IP address are left out (a card under a Hyper-V
   switch repeats its virtual adapter's packets). Loopback traffic is not
   seen. There is no BPF; `-i <interface index>` keeps one adapter. Starting

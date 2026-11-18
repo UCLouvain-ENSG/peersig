@@ -50,15 +50,21 @@ const EVENT_FRAGMENT: u16 = 1001;
 const KW_ETHERNET: u64 = 0x1;
 const KW_WWAN: u64 = 0x200;
 const KW_TUNNEL: u64 = 0x8000;
+const KW_NATIVE_802_11: u64 = 0x1_0000;
 const KW_START: u64 = 0x4000_0000;
 const KW_END: u64 = 0x8000_0000;
 const KW_SEND: u64 = 0x1_0000_0000;
 const TRACE_LEVEL_VERBOSE: u8 = 5;
 
 const SESSION_PREFIX: &str = "PeerSig Capture";
-/// Link types: Ethernet (wired, Wi-Fi), raw IP (mobile broadband, tunnels).
+/// Link types: Ethernet (wired, and Wi-Fi adapters that present themselves
+/// as Ethernet), 802.11 (Wi-Fi adapters whose NDIS medium is Native 802.11,
+/// most of them: their packets are logged as 802.11 data frames, with an
+/// LLC/SNAP header, also outside monitor mode), raw IP (mobile broadband,
+/// tunnels).
 const DLT_EN10MB: i32 = 1;
 const DLT_RAW: i32 = 101;
+const DLT_IEEE802_11: i32 = 105;
 
 /// An EVENT_TRACE_PROPERTIES with room for the session and file names.
 struct Props(Vec<u64>);
@@ -203,10 +209,12 @@ unsafe extern "system" fn on_event(rec: *mut EVENT_RECORD) {
     }
     let dlt = if kw & KW_ETHERNET != 0 {
         DLT_EN10MB
+    } else if kw & KW_NATIVE_802_11 != 0 {
+        DLT_IEEE802_11
     } else if kw & (KW_WWAN | KW_TUNNEL) != 0 {
         DLT_RAW
     } else {
-        // Native 802.11 (monitor mode), virtual switch internals.
+        // Virtual switch internals.
         return;
     };
     if rec.UserData.is_null() || rec.UserDataLength < 12 {
@@ -333,7 +341,8 @@ impl Live {
         Ok(Live { name, handle, rx, thread: Some(thread), received, dropped, filter })
     }
 
-    /// Ethernet; mobile broadband and tunnel adapters give raw IP packets.
+    /// Ethernet; each packet has its own link type (Wi-Fi adapters give
+    /// 802.11 frames, mobile broadband and tunnel adapters raw IP packets).
     pub fn dlt(&self) -> i32 {
         DLT_EN10MB
     }

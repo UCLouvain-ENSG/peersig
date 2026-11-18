@@ -7,6 +7,8 @@ pub const DLT_EN10MB: i32 = 1;
 pub const DLT_RAW: i32 = 12;
 pub const DLT_RAW_BSD: i32 = 14;
 pub const DLT_LINKTYPE_RAW: i32 = 101;
+/// 802.11 frames, no radio header: what Windows logs for Wi-Fi adapters.
+pub const DLT_IEEE802_11: i32 = 105;
 pub const DLT_LOOP: i32 = 108;
 pub const DLT_LINUX_SLL: i32 = 113;
 /// Apple's DLT_PKTAP is DLT_USER2; LINKTYPE_PKTAP in files elsewhere.
@@ -189,12 +191,42 @@ pub fn ip_offset(dlt: i32, d: &[u8]) -> Option<usize> {
             }
             matches!(et, 0x0800 | 0x86dd).then_some(off + 2)
         }
+        DLT_IEEE802_11 => dot11_ip_offset(d),
         DLT_NULL | DLT_LOOP => Some(4),
         DLT_RAW | DLT_RAW_BSD | DLT_LINKTYPE_RAW | DLT_IPV4 | DLT_IPV6 => Some(0),
         DLT_LINUX_SLL => Some(16),
         DLT_LINUX_SLL2 => Some(20),
         _ => None,
     }
+}
+
+/// An 802.11 data frame carrying IP behind an LLC/SNAP header. Windows logs
+/// a Wi-Fi adapter's sent packets this way (its NDIS medium is Native
+/// 802.11, also outside monitor mode), before the card encrypts them.
+fn dot11_ip_offset(d: &[u8]) -> Option<usize> {
+    let (fc, flags) = (*d.first()?, *d.get(1)?);
+    // Protocol version 0, type data, a subtype that carries data (not Null
+    // nor QoS Null), not encrypted.
+    if fc & 0x0f != 0x08 || fc & 0x40 != 0 || flags & 0x40 != 0 {
+        return None;
+    }
+    let mut off = 24;
+    // From DS and To DS: a fourth address.
+    if flags & 0x03 == 0x03 {
+        off += 6;
+    }
+    // QoS data: QoS control, and an HT control with the order bit.
+    if fc & 0x80 != 0 {
+        off += 2;
+        if flags & 0x80 != 0 {
+            off += 4;
+        }
+    }
+    let llc = d.get(off..off + 8)?;
+    if llc[..6] != [0xaa, 0xaa, 0x03, 0, 0, 0] {
+        return None;
+    }
+    matches!(u16::from_be_bytes([llc[6], llc[7]]), 0x0800 | 0x86dd).then_some(off + 8)
 }
 
 pub fn parse_ip(d: &[u8]) -> Option<L4<'_>> {
@@ -311,4 +343,43 @@ pub fn decode(dlt: i32, data: &[u8]) -> Option<(Option<PktapMeta>, L4<'_>)> {
     }
     let off = ip_offset(dlt, data)?;
     Some((None, parse_ip(data.get(off..)?)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// UDP 192.0.2.1:5000 -> 198.51.100.1:443, 4 bytes of payload.
+    const IPV4_UDP: [u8; 32] = [
+        0x45, 0, 0, 32, 0, 1, 0, 0, 64, 17, 0, 0, 192, 0, 2, 1, 198, 51, 100, 1, //
+        0x13, 0x88, 0x01, 0xbb, 0, 12, 0, 0, b'p', b'i', b'n', b'g',
+    ];
+
+    /// An 802.11 frame: frame control, a header of `header` bytes, LLC/SNAP.
+    fn dot11(fc: u8, flags: u8, header: usize, ethertype: u16) -> Vec<u8> {
+        let mut f = vec![fc, flags];
+        f.resize(header, 0);
+        f.extend_from_slice(&[0xaa, 0xaa, 0x03, 0, 0, 0]);
+        f.extend_from_slice(&ethertype.to_be_bytes());
+        f.extend_from_slice(&IPV4_UDP);
+        f
+    }
+
+    #[test]
+    fn dot11_data_frames() {
+        // Data to the access point (what Windows logs for a sent packet),
+        // QoS data, QoS data with HT control, four addresses, with QoS.
+        for (fc, flags, header) in [(0x08, 0x01, 24), (0x88, 0x01, 26), (0x88, 0x81, 30), (0x08, 0x03, 30), (0x88, 0x03, 32)] {
+            let f = dot11(fc, flags, header, 0x0800);
+            assert_eq!(ip_offset(DLT_IEEE802_11, &f), Some(header + 8), "{:02x} {:02x}", fc, flags);
+            let (_, l4) = decode(DLT_IEEE802_11, &f).unwrap();
+            assert_eq!((l4.key.sport, l4.key.dport, l4.payload), (5000, 443, &b"ping"[..]));
+        }
+        // Encrypted, QoS Null (no data), a management frame, ARP, truncated.
+        assert_eq!(ip_offset(DLT_IEEE802_11, &dot11(0x08, 0x41, 24, 0x0800)), None);
+        assert_eq!(ip_offset(DLT_IEEE802_11, &dot11(0xc8, 0x01, 26, 0x0800)), None);
+        assert_eq!(ip_offset(DLT_IEEE802_11, &dot11(0x40, 0x00, 24, 0x0800)), None);
+        assert_eq!(ip_offset(DLT_IEEE802_11, &dot11(0x08, 0x01, 24, 0x0806)), None);
+        assert_eq!(ip_offset(DLT_IEEE802_11, &[0x08, 0x01, 0, 0]), None);
+    }
 }

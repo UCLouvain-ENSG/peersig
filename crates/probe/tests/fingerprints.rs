@@ -55,6 +55,53 @@ fn tcp_out_of_order_and_ipv6() {
     );
 }
 
+/// A little-endian Ethernet pcap rewritten as 802.11 data frames (link type
+/// 105), as Windows logs a Wi-Fi adapter's packets: plain and QoS data
+/// headers in turn, an LLC/SNAP header in front of the EtherType.
+fn as_dot11(eth: &PathBuf) -> PathBuf {
+    let b = std::fs::read(eth).unwrap();
+    let le32 = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) as usize;
+    assert_eq!((&b[..4], le32(20)), (&[0xd4, 0xc3, 0xb2, 0xa1][..], 1), "little-endian Ethernet pcap");
+    let mut out = b[..20].to_vec();
+    out.extend_from_slice(&105u32.to_le_bytes());
+    let (mut o, mut qos) = (24, false);
+    while o + 16 <= b.len() {
+        let (cap, orig) = (le32(o + 8), le32(o + 12));
+        let f = &b[o + 16..o + 16 + cap];
+        // To DS: addr1 the access point, addr2 the source, addr3 the destination.
+        let mut d = vec![if qos { 0x88 } else { 0x08 }, 0x01, 0, 0, 0x02, 0, 0, 0, 0, 0xaa];
+        d.extend_from_slice(&f[6..12]);
+        d.extend_from_slice(&f[..6]);
+        d.extend_from_slice(&[0, 0]);
+        if qos {
+            d.extend_from_slice(&[0, 0]);
+        }
+        d.extend_from_slice(&[0xaa, 0xaa, 0x03, 0, 0, 0]);
+        d.extend_from_slice(&f[12..]);
+        out.extend_from_slice(&b[o..o + 8]);
+        out.extend_from_slice(&(d.len() as u32).to_le_bytes());
+        out.extend_from_slice(&((orig + d.len() - cap) as u32).to_le_bytes());
+        out.extend_from_slice(&d);
+        o += 16 + cap;
+        qos = !qos;
+    }
+    let p = std::env::temp_dir().join(format!("peersig-dot11-{}.pcap", std::process::id()));
+    std::fs::write(&p, out).unwrap();
+    p
+}
+
+#[test]
+fn wifi_frames() {
+    // Windows logs a Wi-Fi adapter's packets as 802.11 frames: the same
+    // ClientHellos must come out as over Ethernet.
+    let eth = crate_dir().join("tests/data/tcp_split.pcap");
+    let dot11 = as_dot11(&eth);
+    let (got, want) = (hellos(&dot11), hellos(&eth));
+    let _ = std::fs::remove_file(&dot11);
+    assert_eq!(want.len(), 3);
+    assert_eq!(got, want);
+}
+
 #[test]
 fn dtls_fragments() {
     // DTLS 1.2 in 2 fragments sent twice; DTLS 1.3 in 8 fragments out of order.
