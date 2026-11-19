@@ -8,6 +8,8 @@ First get an enrollment code at https://peersig.org (in one click from the UCLou
 - **Linux server** (x86_64, systemd; no desktop needed): install `peersig-headless_<version>_amd64.deb` or `peersig-headless-<version>-1.x86_64.rpm`, then run `sudo peersig configure` with your code. Each week's list is reviewed with `sudo peersig items`. See `docs/headless.md`.
 - **Collection server, relay, probe, `peersig`** (Linux x86_64): `peersig-<version>-linux-x86_64.tar.gz`. See `docs/deploy.md`.
 
+To update, install the new version over the old one. On macOS and Windows, PeerSig then offers to update its capture service (*Update capture service*), which asks for an administrator's password or consent again: until then, the service keeps capturing with the old version.
+
 Check downloads against `SHA256SUMS`.
 
 ## What PeerSig sends
