@@ -39,7 +39,6 @@ async fn through_the_relay() {
         os: "linux 6".into(),
         transport: "quic".into(),
         ja4: "q13d0311h3_55b375c5d22e_5a1f323ef56d".into(),
-        ja4_legacy: None,
         app: AppRef { name: "curl".into(), id: None, version: Some("8.21.0".into()), team_id: None, kind: "cli".into(), engine: None },
     };
     let pl = plan(cfg.report_epoch, &[item.clone()], false, 4, &mut || rand::random::<f64>());

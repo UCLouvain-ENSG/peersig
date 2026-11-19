@@ -16,7 +16,6 @@ fn hello(app: &str, ja4: &str) -> Item {
         os: "macos 27".into(),
         transport: "tcp".into(),
         ja4: ja4.into(),
-        ja4_legacy: None,
         app: AppRef { name: app.into(), id: None, version: Some("1.0".into()), team_id: None, kind: "app".into(), engine: None },
     }
 }

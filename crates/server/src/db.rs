@@ -71,10 +71,42 @@ fn migrate(c: &Connection) -> Result<()> {
 }
 
 pub fn open(path: &str) -> Result<Connection> {
-    let c = Connection::open(path).with_context(|| path.to_string())?;
+    let mut c = Connection::open(path).with_context(|| path.to_string())?;
     c.execute_batch(SCHEMA)?;
     migrate(&c)?;
+    canonical_keys(&mut c)?;
     Ok(c)
+}
+
+/// Counters stored under a key that is no longer their item's (a field
+/// older apps sent, which `Item` now drops) are added to the item's current
+/// key: the same item is counted once, not split in two below k.
+fn canonical_keys(c: &mut Connection) -> Result<()> {
+    let tx = c.transaction()?;
+    for (table, period) in [("counts", "epoch"), ("observed", "day")] {
+        let rows: Vec<(i64, String, i64)> = {
+            let mut st = tx.prepare(&format!("SELECT {period}, item, n FROM {table}"))?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
+            rows
+        };
+        for (p, key, n) in rows {
+            let Some(item) = Item::from_key(&key) else { continue };
+            let current = item.key();
+            if current == key {
+                continue;
+            }
+            tx.execute(&format!("DELETE FROM {table} WHERE {period} = ?1 AND item = ?2"), params![p, key])?;
+            tx.execute(
+                &format!(
+                    "INSERT INTO {table}({period}, item, class, n) VALUES(?1, ?2, ?3, ?4)
+                     ON CONFLICT({period}, item) DO UPDATE SET n = n + excluded.n"
+                ),
+                params![p, current, item.class().name(), n],
+            )?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn meta_get(c: &Connection, k: &str) -> Result<Option<Vec<u8>>> {

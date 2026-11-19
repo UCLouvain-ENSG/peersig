@@ -28,9 +28,8 @@ Items (`crates/proto/src/item.rs`), at most once per item and week:
 
 - `hello`: the system and its major version (`macos 27`, `windows 11`; on
   Linux the distribution's, `linux ubuntu 24`), transport (tcp, quic,
-  dtls), JA4, an earlier non-standard JA4 (`ja4_legacy`), and the
-  application: name, bundle id, version, code-signing team, kind (browser,
-  app, system, cli), engine.
+  dtls), JA4, and the application: name, bundle id, version, code-signing
+  team, kind (browser, app, system, cli), engine.
 - `domain` (opt-in): the same application fields without version, a server
   name it put in a ClientHello (SNI), and the JA4 of that ClientHello: what
   anyone on the network path sees together. Never for browsers. Only SNI:

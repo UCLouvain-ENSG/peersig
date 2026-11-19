@@ -225,7 +225,6 @@ impl Pipeline {
             "ja4_r": fp.ja4_r,
             "ja4_o": fp.ja4_o,
             "ja4_ro": fp.ja4_ro,
-            "ja4_legacy": fp.ja4_legacy,
             "ja3": fp.ja3,
             "ja3_r": fp.ja3_r,
             "packets": h.packets,

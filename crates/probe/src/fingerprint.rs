@@ -1,7 +1,5 @@
 //! JA4 (FoxIO spec, technical_details/JA4.md), its raw and original-order
-//! variants, JA3, and `ja4_legacy`: an earlier, non-standard value (the
-//! extension hash without the signature algorithms), to join with TAP
-//! records archived with it before 2026-11-16.
+//! variants, and JA3.
 
 use crate::tls::{is_grease, ClientHello, EXT_ALPN, EXT_SNI};
 use serde::Serialize;
@@ -13,10 +11,6 @@ pub struct Fingerprints {
     pub ja4_r: String,
     pub ja4_o: String,
     pub ja4_ro: String,
-    /// The earlier value, archived until 2026-11-16: its extension hash
-    /// left out the signature algorithms. None for DTLS (never archived).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ja4_legacy: Option<String>,
     pub ja3: String,
     pub ja3_r: String,
 }
@@ -139,8 +133,6 @@ pub fn compute(ch: &ClientHello, transport: Transport) -> Fingerprints {
     let ja4_r = format!("{}_{}_{}{}", a, hex_list(&ciphers_sorted), hex_list(&exts_sorted), sig_part);
     let ja4_ro = format!("{}_{}_{}{}", a, hex_list(&ciphers), hex_list(&exts), sig_part);
 
-    let ja4_legacy = (transport != Transport::Dtls).then(|| legacy_ja4(ch, transport, &ciphers_sorted, &exts_sorted));
-
     let dec = |v: &[u16]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("-");
     let ja3_r = format!(
         "{},{},{},{},{}",
@@ -152,38 +144,7 @@ pub fn compute(ch: &ClientHello, transport: Transport) -> Fingerprints {
     );
     let ja3 = format!("{:x}", md5::compute(ja3_r.as_bytes()));
 
-    Fingerprints { ja4, ja4_r, ja4_o, ja4_ro, ja4_legacy, ja3, ja3_r }
-}
-
-/// Mirror of `traffic_classifier::ja4::compute_ja4` before 2026-11-16: same JA4_a and JA4_b,
-/// JA4_c over the sorted extensions only, ALPN as its first and last bytes
-/// whatever they are. SNI flag from a non-empty parsed name.
-fn legacy_ja4(ch: &ClientHello, transport: Transport, ciphers_sorted: &[u16], exts_sorted: &[u16]) -> String {
-    let ver = match offered_version(ch) {
-        0x0304 => "13",
-        0x0303 => "12",
-        0x0302 => "11",
-        0x0301 => "10",
-        0x0300 => "s3",
-        _ => "00",
-    };
-    let sni = if ch.sni.as_deref().map_or(true, str::is_empty) { 'i' } else { 'd' };
-    let alpn = match ch.alpn.first() {
-        Some(p) if p.len() >= 2 => format!("{}{}", p[0] as char, p[p.len() - 1] as char),
-        Some(p) if p.len() == 1 => format!("{}{}", p[0] as char, p[0] as char),
-        _ => "00".into(),
-    };
-    format!(
-        "{}{}{}{:02}{:02}{}_{}_{}",
-        transport.letter(),
-        ver,
-        sni,
-        no_grease(&ch.ciphers).len().min(99),
-        no_grease(&ch.extensions).len().min(99),
-        alpn,
-        hash12(&hex_list(ciphers_sorted)),
-        hash12(&hex_list(exts_sorted))
-    )
+    Fingerprints { ja4, ja4_r, ja4_o, ja4_ro, ja3, ja3_r }
 }
 
 #[cfg(test)]

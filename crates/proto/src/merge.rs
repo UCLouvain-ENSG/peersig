@@ -270,7 +270,7 @@ mod tests {
         AppRef { name: name.into(), id: Some("com.example".into()), version: version.map(String::from), team_id: None, kind: "cli".into(), engine: None }
     }
     fn hello(name: &str, version: Option<&str>, ja4: &str) -> Item {
-        Item::Hello { os: "macos 27".into(), transport: "tcp".into(), ja4: ja4.into(), ja4_legacy: None, app: app(name, version) }
+        Item::Hello { os: "macos 27".into(), transport: "tcp".into(), ja4: ja4.into(), app: app(name, version) }
     }
     fn domain(name: &str, d: &str) -> Item {
         Item::Domain { os: "macos 27".into(), app: app(name, None), domain: d.into(), ja4: JA4.into() }

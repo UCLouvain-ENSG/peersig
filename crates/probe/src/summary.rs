@@ -18,8 +18,6 @@ struct AppUse {
     last: String,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     sni: BTreeSet<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ja4_legacy: Option<String>,
     kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     engine: Option<String>,
@@ -84,7 +82,6 @@ pub fn run(files: &[String], o: &Opts) -> Result<()> {
                         u.kind = s(&app, "kind").unwrap_or_default();
                         u.engine = s(&app, "engine");
                         u.id = s(&app, "id");
-                        u.ja4_legacy = s(&v, "ja4_legacy");
                     }
                     u.count += 1;
                     u.last = ts;

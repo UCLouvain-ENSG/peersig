@@ -16,7 +16,7 @@ fn app(name: &str, kind: &str) -> AppRef {
 }
 
 fn hello(name: &str, ja4: &str) -> Item {
-    Item::Hello { os: "linux 6".into(), transport: "tcp".into(), ja4: ja4.into(), ja4_legacy: None, app: app(name, "cli") }
+    Item::Hello { os: "linux 6".into(), transport: "tcp".into(), ja4: ja4.into(), app: app(name, "cli") }
 }
 
 fn domain(name: &str, kind: &str, d: &str) -> Item {
@@ -160,5 +160,41 @@ fn older_databases_are_migrated() {
     drop(c);
     // Opening again does not try to add it twice.
     db::open(path.to_str().unwrap()).unwrap();
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Counters stored under the key of an older app's item (PeerSig up to
+/// 0.1.9 sent a second, non-standard JA4) join the item's current key when
+/// the server starts, for participants and observers alike.
+#[test]
+fn older_item_keys_join_the_current_one() {
+    let path = std::env::temp_dir().join(format!("peersig-keys-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let item = hello("curl", "t13d1516h2_8daaf6152771_e5627efa2ab1");
+    let old = item.key().replacen("\"ja4\":", "\"ja4_legacy\":\"t13d1516h2_8daaf6152771_02713d6af862\",\"ja4\":", 1);
+    assert_ne!(old, item.key());
+    let tables = [("counts", "epoch"), ("observed", "day")];
+    {
+        let c = db::open(path.to_str().unwrap()).unwrap();
+        for (table, period) in tables {
+            let add = |p: i64, key: &str, n: i64| {
+                c.execute(
+                    &format!("INSERT INTO {table}({period}, item, class, n) VALUES(?1, ?2, ?3, ?4)"),
+                    rusqlite::params![p, key, item.class().name(), n],
+                )
+                .unwrap()
+            };
+            add(5, &old, 2);
+            add(5, &item.key(), 3);
+            add(6, &old, 1);
+        }
+    }
+    let c = db::open(path.to_str().unwrap()).unwrap();
+    for (table, period) in tables {
+        let mut st = c.prepare(&format!("SELECT {period}, item, n FROM {table} ORDER BY {period}")).unwrap();
+        let rows: Vec<(i64, String, i64)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<Result<_, _>>().unwrap();
+        assert_eq!(rows, vec![(5, item.key(), 5), (6, item.key(), 1)], "{}", table);
+    }
+    drop(c);
     let _ = std::fs::remove_file(&path);
 }

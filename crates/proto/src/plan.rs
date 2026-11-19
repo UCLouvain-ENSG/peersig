@@ -60,7 +60,6 @@ mod tests {
             os: "macos 27".into(),
             transport: "tcp".into(),
             ja4: ja4.into(),
-            ja4_legacy: None,
             app: AppRef { name: "X".into(), id: None, version: None, team_id: None, kind: "app".into(), engine: None },
         }
     }

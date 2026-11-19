@@ -65,7 +65,7 @@ One JSON object per line, with these `type`s:
 | --- | --- | --- |
 | `start` | first line | tool and app-table versions, random session id, OS version and build, Mac model, device, kernel filter |
 | `process` | first time a process is seen | pid, start time, executable, bundle chain (id, name, version of each `.app`/`.framework`/`.xpc`), code signature (identifier, team id, Apple platform binary), embedded Info.plist, engine, Go version, Homebrew/Nix package, Chromium helper type, interpreter script name, TLS libraries mapped and linked, responsible pid; on Windows also the version resource, subsystem (gui, console), MSIX/Scoop package and the services a svchost runs |
-| `hello` | each ClientHello | time, transport (tcp, quic, dtls), QUIC version, addresses, interface, service class, SNI, ALPN, ECH, `ja4`, `ja4_r`, `ja4_o`, `ja4_ro`, `ja4_legacy`, `ja3`, `ja3_r`, the socket's process (`proc`, `helper`, `stacks`), effective (`eproc`) and responsible (`resp`) processes, and `app` |
+| `hello` | each ClientHello | time, transport (tcp, quic, dtls), QUIC version, addresses, interface, service class, SNI, ALPN, ECH, `ja4`, `ja4_r`, `ja4_o`, `ja4_ro`, `ja3`, `ja3_r`, the socket's process (`proc`, `helper`, `stacks`), effective (`eproc`) and responsible (`resp`) processes, and `app` |
 | `domain` | every 5 minutes (`--flush-every`) and at exit, for each (process, name) that changed | credited process and app, name, `via` (sni, dns, dns-query, http), cumulative count, first and last time, ports, JA4s |
 | `stats` | every 5 minutes and at exit | packets, ClientHellos per transport, failures, libpcap drops |
 
@@ -147,10 +147,7 @@ need PKTAP metadata: without it, only SNI fills the table.
 ## Fingerprints
 
 `ja4` follows FoxIO's [JA4 spec](https://github.com/FoxIO-LLC/ja4/blob/main/technical_details/JA4.md),
-and so do `ja4_r`, `ja4_o` and `ja4_ro`. `ja4_legacy` is an earlier,
-non-standard value whose extension hash left out the signature algorithms,
-to join with TAP records archived with it before 2026-11-16
-(`summary --key ja4_legacy` groups by it).
+and so do `ja4_r`, `ja4_o` and `ja4_ro`.
 
 QUIC Initial packets are decrypted (v1, v2, drafts 23 to 34). A ClientHello
 split over several packets or datagrams is put back together by CRYPTO
@@ -178,11 +175,7 @@ the numerically smallest (0xfefc is DTLS 1.3), which matches Wireshark.
   Their values match tshark (DTLS 1.3 in order: tshark does not reassemble
   out-of-order DTLS fragments). The header layout of the PKTAP capture also
   matches Wireshark's PKTAP dissector.
-- `ja4_legacy` on `quic_retry.pcapng` is `q13d0308h3_55b375c5d22e_861f5c13a969`,
-  the value the classifier wrote for it in `tc.json` before the fix. The
-  fixed classifier gives the same `ja4` as tshark 4.6 on the 122 TLS and QUIC
-  ClientHellos of those traces, as the probe does. `tests/data/traces` keeps the
-  small ones (78 ClientHellos).
+- `tests/data/traces` keeps the small traces (78 ClientHellos).
 - `cargo test`: RFC 9001 and RFC 9369 Initial keys, the JA4 spec's worked
   example, the ALPN rules, DNS, and the end-to-end captures above.
 

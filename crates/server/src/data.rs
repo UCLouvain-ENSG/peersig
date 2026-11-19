@@ -62,15 +62,9 @@ fn sorted<'a>(mut v: Vec<(&'a Item, u32)>) -> Vec<(&'a Item, u32)> {
 
 fn row(item: &Item, n: u32) -> String {
     let (app, what) = match item {
-        Item::Hello { transport, ja4, ja4_legacy, app, .. } => (
-            app,
-            format!(
-                r#"<span class="muted">{}</span> <code>{}</code>{}"#,
-                esc(&transport.to_uppercase()),
-                esc(ja4),
-                ja4_legacy.as_deref().map(|l| format!(r#"<div class="small muted">legacy <code>{}</code></div>"#, esc(l))).unwrap_or_default()
-            ),
-        ),
+        Item::Hello { transport, ja4, app, .. } => {
+            (app, format!(r#"<span class="muted">{}</span> <code>{}</code>"#, esc(&transport.to_uppercase()), esc(ja4)))
+        }
         Item::Domain { app, domain, ja4, .. } => {
             (app, format!(r#"<code>{}</code><div class="small"><code>{}</code></div>"#, esc(domain), esc(ja4)))
         }

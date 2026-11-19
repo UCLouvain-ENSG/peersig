@@ -58,7 +58,7 @@ impl Class {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields, from = "Received")]
 pub enum Item {
     Hello {
         /// "macos 27", "windows 11": the system and its major version only;
@@ -67,11 +67,6 @@ pub enum Item {
         /// tcp, quic or dtls.
         transport: String,
         ja4: String,
-        /// An earlier, non-standard JA4 (extension hash without the
-        /// signature algorithms), to label traffic archived with it before
-        /// 2026-11-16.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        ja4_legacy: Option<String>,
         app: AppRef,
     },
     Domain {
@@ -86,6 +81,42 @@ pub enum Item {
     Presence {
         shares_domains: bool,
     },
+}
+
+/// An item as it arrives, from any app version: as `Item`, except that a
+/// `hello` from PeerSig 0.1.9 or older also carries a second, non-standard
+/// JA4, which is dropped. Their ballots count under the same key as
+/// everyone else's, and counters stored before keep a key `Item` reads.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum Received {
+    Hello {
+        os: String,
+        transport: String,
+        ja4: String,
+        #[serde(default, rename = "ja4_legacy")]
+        _dropped: Option<String>,
+        app: AppRef,
+    },
+    Domain {
+        os: String,
+        app: AppRef,
+        domain: String,
+        ja4: String,
+    },
+    Presence {
+        shares_domains: bool,
+    },
+}
+
+impl From<Received> for Item {
+    fn from(r: Received) -> Item {
+        match r {
+            Received::Hello { os, transport, ja4, app, .. } => Item::Hello { os, transport, ja4, app },
+            Received::Domain { os, app, domain, ja4 } => Item::Domain { os, app, domain, ja4 },
+            Received::Presence { shares_domains } => Item::Presence { shares_domains },
+        }
+    }
 }
 
 impl Item {
@@ -123,18 +154,13 @@ impl Item {
     /// Checks shapes and sizes, so the server stores only well-formed items.
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Item::Hello { os, transport, ja4, ja4_legacy, app } => {
+            Item::Hello { os, transport, ja4, app } => {
                 check_os(os)?;
                 if !matches!(transport.as_str(), "tcp" | "quic" | "dtls") {
                     return Err(format!("transport {:?}", transport));
                 }
                 if !is_ja4(ja4) {
                     return Err(format!("ja4 {:?}", ja4));
-                }
-                if let Some(l) = ja4_legacy {
-                    if !is_ja4(l) {
-                        return Err(format!("ja4_legacy {:?}", l));
-                    }
                 }
                 check_app(app)
             }
@@ -418,7 +444,6 @@ impl Collector {
                     os,
                     transport,
                     ja4,
-                    ja4_legacy: opt(v, "ja4_legacy"),
                     app: AppRef {
                         name,
                         id: opt(&app, "id"),
@@ -491,7 +516,7 @@ mod tests {
 
     #[test]
     fn key_is_canonical_and_round_trips() {
-        let i = Item::Hello { os: "macos 27".into(), transport: "tcp".into(), ja4: "t13d1516h2_8daaf6152771_e5627efa2ab1".into(), ja4_legacy: None, app: app() };
+        let i = Item::Hello { os: "macos 27".into(), transport: "tcp".into(), ja4: "t13d1516h2_8daaf6152771_e5627efa2ab1".into(), app: app() };
         assert!(i.validate().is_ok());
         let k = i.key();
         assert!(k.starts_with(r#"{"type":"hello","os":"macos 27""#), "{}", k);
@@ -501,11 +526,16 @@ mod tests {
         // Unknown fields are refused: an item cannot smuggle extra data.
         let extra = k.replacen("{\"type\":\"hello\",", "{\"type\":\"hello\",\"ip\":\"10.0.0.1\",", 1);
         assert!(Item::from_key(&extra).is_none());
+        // The second JA4 of apps up to 0.1.9 is read and dropped: their
+        // ballots count under the same key.
+        let older = k.replacen("\"ja4\":", "\"ja4_legacy\":\"t13d1516h2_8daaf6152771_02713d6af862\",\"ja4\":", 1);
+        assert_ne!(older, k);
+        assert_eq!(Item::from_key(&older).unwrap().key(), k);
     }
 
     #[test]
     fn validation() {
-        let mut i = Item::Hello { os: "macos 27".into(), transport: "tcp".into(), ja4: "t13d1516h2_8daaf6152771_e5627efa2ab1".into(), ja4_legacy: None, app: app() };
+        let mut i = Item::Hello { os: "macos 27".into(), transport: "tcp".into(), ja4: "t13d1516h2_8daaf6152771_e5627efa2ab1".into(), app: app() };
         assert!(i.validate().is_ok());
         if let Item::Hello { ja4, .. } = &mut i {
             *ja4 = "t13d1516h2_8daaf6152771".into();

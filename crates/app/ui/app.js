@@ -224,8 +224,7 @@ function renderOverview() {
 // ------------------------------------------------------------ items
 
 function describe(item) {
-  if (item.type === "hello") return [`${item.transport.toUpperCase()} handshake`, el("div", { class: "mono" }, item.ja4),
-    item.ja4_legacy ? el("div", { class: "mono muted small", title: "An earlier, non-standard JA4, to label traffic archived before 2026-11-16" }, `legacy ${item.ja4_legacy}`) : null];
+  if (item.type === "hello") return [`${item.transport.toUpperCase()} handshake`, el("div", { class: "mono" }, item.ja4)];
   if (item.type === "domain") return [`${item.ja4.startsWith("q") ? "QUIC" : "TCP"} connection to`, el("div", { class: "mono" }, item.domain), el("div", { class: "mono muted small" }, item.ja4)];
   return [item.type];
 }
