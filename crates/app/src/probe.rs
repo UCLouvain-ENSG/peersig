@@ -78,6 +78,21 @@ pub fn installed() -> bool {
     }
 }
 
+/// Whether the capture service runs another probe than the one this app
+/// ships, from the `tool` its status file names (`peersig-probe 0.1.7`).
+/// On Windows and macOS the service runs its own copy of the probe, made
+/// when it was installed: updating the app (the MSI, a new PeerSig.app)
+/// does not replace it, so the service keeps the old probe and its bugs
+/// until it is installed again. Linux runs the app's own probe.
+pub fn service_outdated(tool: Option<&str>) -> bool {
+    (cfg!(windows) || cfg!(target_os = "macos")) && installed() && tool.is_some_and(not_shipped)
+}
+
+/// Whether a probe's `tool` is not the probe this app ships.
+fn not_shipped(tool: &str) -> bool {
+    tool != concat!("peersig-probe ", env!("CARGO_PKG_VERSION"))
+}
+
 fn env_dir(var: &str, default: &str) -> PathBuf {
     std::env::var_os(var).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(default))
 }
@@ -200,7 +215,12 @@ Step 2 {{
 }}
 Step 3 {{
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $exe) | Out-Null
-  Copy-Item -LiteralPath {probe} -Destination $exe -Force
+  # An update replaces a running service: its probe may hold the file a
+  # little after the service reports stopped.
+  for ($i = 0; ; $i++) {{
+    try {{ Copy-Item -LiteralPath {probe} -Destination $exe -Force; break }}
+    catch {{ if ($i -ge 10) {{ throw }}; Start-Sleep -Seconds 1 }}
+  }}
 }}
 # %ProgramData%\PeerSig: only SYSTEM and administrators may change it. Any
 # user could have made it before: take it back, and refuse a link.
@@ -400,6 +420,13 @@ pub fn open(target: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shipped_probe() {
+        // The probe names itself with the workspace's version, as the app does.
+        assert!(!not_shipped(&format!("peersig-probe {}", env!("CARGO_PKG_VERSION"))));
+        assert!(not_shipped("peersig-probe 0.1.7"));
+    }
 
     #[test]
     fn windows_scripts() {

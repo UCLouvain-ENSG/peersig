@@ -149,6 +149,11 @@ function captureCard() {
     body.push(el("div", { class: "row" }, el("button", { class: "btn primary", onclick: async () => { await call("install_probe"); refresh(); } }, "Install capture service")));
     return el("div", { class: "card" }, el("h2", {}, "Capture"), ...body);
   }
+  if (state.probe_outdated) {
+    body.push(el("div", { class: "notice" }, `The capture service still runs ${p.tool}, not the probe that came with this version of PeerSig: installing PeerSig does not update the service. Update it to get this version's fixes. `,
+      state.os === "windows" ? "Windows will ask for an administrator's permission." : "Your computer will ask for an administrator password."));
+    body.push(el("div", { class: "row" }, el("button", { class: "btn primary", onclick: async () => { await call("install_probe"); refresh(); } }, "Update capture service")));
+  }
   if (state.paused) body.push(el("div", { class: "big warn" }, "Paused"), el("p", { class: "muted" }, "The capture device is closed: nothing is being looked at."));
   else if (p.running) body.push(el("div", { class: "big ok" }, "Capturing"));
   else if (p.error) body.push(el("div", { class: "big bad" }, "Cannot capture"), el("p", { class: "muted" }, p.error, el("br"), "The service tries again every 30 seconds."));

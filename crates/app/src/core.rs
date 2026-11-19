@@ -200,6 +200,8 @@ pub struct View {
     pub cycle: Option<Cycle>,
     pub probe: ProbeStatus,
     pub probe_installed: bool,
+    /// The service runs an older (or other) probe than this app ships.
+    pub probe_outdated: bool,
     pub paused: bool,
     pub os: &'static str,
     pub config: Option<Config>,
@@ -256,6 +258,7 @@ impl Core {
             cycle: self.cycle(),
             probe: self.probe.clone(),
             probe_installed: probe::installed(),
+            probe_outdated: probe::service_outdated(self.probe.tool.as_deref()),
             paused: probe::is_paused(&self.p.settings.logs()),
             os: std::env::consts::OS,
             config: self.config.as_ref().map(|c| c.1.clone()),

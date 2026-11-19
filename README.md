@@ -56,7 +56,9 @@ app from the [releases](https://github.com/UCLouvain-ENSG/peersig/releases)
 page (macOS `.dmg`, Linux `.deb` or `.rpm`, Windows `.msi`), open it and enter the
 code: the server and relay addresses are filled in. On macOS and Windows,
 the app installs its capture service once; the system asks for an
-administrator's password or consent. Nothing else needs installing: on
+administrator's password or consent. Installing a newer PeerSig does not
+update that service: the app then offers to, and asks again. Nothing else
+needs installing: on
 Windows, PeerSig uses the packet capture built into the system.
 
 The PeerSig icon in the menu bar shows what is happening: a fingerprint while
