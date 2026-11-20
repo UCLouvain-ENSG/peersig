@@ -1,0 +1,22 @@
+[package]
+name = "peersig-client"
+description = "PeerSig's participant side, shared by the desktop and Android apps: settings, the report cycle, the window's commands"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+peersig-proto = { path = "../proto", features = ["client"] }
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time", "macros"] }
+
+[dev-dependencies]
+axum = "0.8.9"
+peersig-server = { path = "../server" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

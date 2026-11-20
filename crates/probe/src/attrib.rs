@@ -218,6 +218,15 @@ pub struct Process {
 }
 
 impl Process {
+    /// An Android app, known by its uid (`uid:10123`): Android does not
+    /// let an app look at other apps' processes.
+    pub fn of_uid(uid: u32, name: &str) -> Process {
+        let mut p = Process::stub(format!("uid:{}", uid), 0, name);
+        p.uid = Some(uid);
+        p.alive = true;
+        p
+    }
+
     fn stub(id: String, pid: i32, name: &str) -> Process {
         Process {
             id,
@@ -280,7 +289,7 @@ impl App {
 }
 
 pub struct Attribution {
-    /// pktap, pktap-offline, socket-table, none
+    /// pktap, pktap-offline, socket-table, uid (Android), none
     pub source: &'static str,
     pub proc: Option<Arc<Process>>,
     pub eproc: Option<Arc<Process>>,
@@ -298,8 +307,22 @@ impl Attribution {
     }
 }
 
+/// Who owns a connection, when the system says so itself: on Android, the
+/// app (by uid) that `ConnectivityManager.getConnectionOwnerUid` names,
+/// asked by the PeerSig app (crates/android). It replaces the process
+/// lookups, which Android does not allow.
+pub trait Owners: Send {
+    /// The app behind the connection `key` (as the ClientHello's packet
+    /// gives it), or None when the system does not know.
+    fn owner(&mut self, key: &FlowKey) -> Option<(Arc<Process>, App)>;
+}
+
 const INTERPRETERS: &[&str] =
     &["python", "python3", "node", "ruby", "perl", "php", "java", "bun", "deno", "osascript", "bash", "zsh", "sh", "pwsh"];
+
+/// How long a socket owner looked up stands for its flow: longer than a
+/// ClientHello takes after the SYN (the tracker's 30 s).
+const SOCKET_TTL: Duration = Duration::from_secs(60);
 
 const SYSTEM_PREFIXES: &[&str] = &["/System/", "/usr/bin/", "/usr/sbin/", "/usr/libexec/", "/usr/lib/", "/sbin/", "/bin/", "/Library/Apple/"];
 
@@ -308,7 +331,10 @@ pub struct Resolver {
     bundles: Bundles,
     exes: HashMap<String, Arc<ExeInfo>>,
     procs: HashMap<i32, Arc<Process>>,
-    socket_cache: HashMap<FlowKey, Option<i32>>,
+    /// Socket owners looked up, for `SOCKET_TTL`: the connection's SYN and
+    /// ClientHello share one lookup, a later connection on the same
+    /// addresses and ports gets its own.
+    socket_cache: HashMap<FlowKey, (Instant, Option<i32>)>,
     /// This machine's addresses, and when they were listed.
     own: Option<(Instant, HashSet<IpAddr>)>,
     /// Query live processes (false when reading a capture file).
@@ -317,6 +343,8 @@ pub struct Resolver {
     /// ClientHellos from an address that is not this machine's: forwarded
     /// or bridged, so no local process sent them.
     pub not_local: u64,
+    /// Android: the system names each connection's app.
+    pub owners: Option<Box<dyn Owners>>,
 }
 
 impl Resolver {
@@ -331,6 +359,7 @@ impl Resolver {
             live,
             lookups: 0,
             not_local: 0,
+            owners: None,
         }
     }
 
@@ -475,6 +504,13 @@ impl Resolver {
     }
 
     pub fn attribute(&mut self, meta: Option<&PktapMeta>, key: &FlowKey) -> Attribution {
+        if let (None, Some(owners)) = (meta, self.owners.as_mut()) {
+            self.lookups += 1;
+            return match owners.owner(key) {
+                Some((p, app)) => Attribution { source: "uid", proc: Some(p), eproc: None, resp: None, app },
+                None => Attribution { source: "none", proc: None, eproc: None, resp: None, app: self.app_of(None, None, "self".into()) },
+            };
+        }
         let (source, proc, eproc) = match meta {
             Some(m) if m.pid > 0 || !m.comm.is_empty() => {
                 let proc = self.proc_or_stub(m.pid, &m.comm);
@@ -491,13 +527,13 @@ impl Resolver {
             }
             _ if self.live => {
                 let pid = match self.socket_cache.get(key) {
-                    Some(p) => *p,
-                    None => {
+                    Some((t, p)) if t.elapsed() < SOCKET_TTL => *p,
+                    _ => {
                         let p = platform::socket_owner(key);
                         if self.socket_cache.len() > 50_000 {
-                            self.socket_cache.clear();
+                            self.socket_cache.retain(|_, (t, _)| t.elapsed() < SOCKET_TTL);
                         }
-                        self.socket_cache.insert(*key, p);
+                        self.socket_cache.insert(*key, (Instant::now(), p));
                         p
                     }
                 };

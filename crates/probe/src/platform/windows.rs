@@ -57,7 +57,7 @@ use crate::net::{FlowKey, TCP};
 /// Every adapter, through the system's packet capture (`capture::etw`).
 pub const DEFAULT_DEVICE: &str = "all";
 
-pub(crate) fn wide(s: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
+pub fn wide(s: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
     s.as_ref().encode_wide().chain(std::iter::once(0)).collect()
 }
 

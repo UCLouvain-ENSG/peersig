@@ -2,23 +2,8 @@
 //! application that sent it, and records the names each process contacts.
 //! See README.md.
 
-mod attrib;
-mod binary;
-mod bundle;
-mod capture;
-mod dns;
-mod domains;
-mod fingerprint;
-mod flow;
-mod logdir;
-mod net;
-mod pipeline;
-mod platform;
-mod quic;
 #[cfg(windows)]
 mod service;
-mod summary;
-mod tls;
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -31,8 +16,9 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use serde_json::json;
 
-use attrib::Resolver;
-use pipeline::{Options, Pipeline};
+use peersig_probe::attrib::Resolver;
+use peersig_probe::pipeline::{now_ts, start_record, Options, Pipeline};
+use peersig_probe::{capture, logdir, net, pipeline, platform, summary};
 
 #[derive(Parser)]
 #[command(version, about = "Ties TLS/QUIC/DTLS JA4 fingerprints to the applications that send them")]
@@ -172,24 +158,6 @@ fn main() -> Result<()> {
     }
 }
 
-fn session_id() -> String {
-    let mut b = [0u8; 8];
-    match File::open("/dev/urandom") {
-        Ok(mut f) => {
-            let _ = std::io::Read::read_exact(&mut f, &mut b);
-        }
-        Err(_) => {
-            // Windows: std seeds its hash keys from the system's random
-            // generator.
-            use std::hash::{BuildHasher, Hasher};
-            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-            h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
-            b = h.finish().to_le_bytes();
-        }
-    }
-    b.iter().map(|x| format!("{:02x}", x)).collect()
-}
-
 /// Output file owned by the user who ran sudo, so they can read and send it.
 fn create_output(path: &str) -> Result<Box<dyn Write + Send>> {
     let f = File::create(path).with_context(|| format!("creating {}", path))?;
@@ -201,28 +169,6 @@ fn create_output(path: &str) -> Result<Box<dyn Write + Send>> {
         }
     }
     Ok(Box::new(BufWriter::with_capacity(1 << 16, f)))
-}
-
-fn start_record(device: &str, dlt: i32, filter: &str, live: bool, names: bool, db: &str) -> serde_json::Value {
-    json!({
-        "type": "start",
-        "ts": now_ts(),
-        "tool": format!("peersig-probe {}", env!("CARGO_PKG_VERSION")),
-        "apps_db": db,
-        "session": session_id(),
-        // The capturing machine's OS; unknown for a capture file.
-        "os": if live { serde_json::to_value(platform::os_info()).unwrap_or_default() } else { serde_json::Value::Null },
-        "device": device,
-        // Link type: 149 or 258 is PKTAP, with a process on every packet.
-        "dlt": dlt,
-        "filter": filter,
-        "live": live,
-        "names": names,
-    })
-}
-
-fn now_ts() -> String {
-    pipeline::ts_string(chrono::Utc::now().timestamp_micros() as f64 / 1e6)
 }
 
 pub struct RunArgs {

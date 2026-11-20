@@ -18,6 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,7 @@ use peersig_proto::wire::{Ballot, Config, ObserverReceipt, ObserverReport};
 use peersig_proto::{code, EpochSpec, Item};
 
 use crate::local::{self, ProbeStatus};
-use crate::probe;
+use crate::Host;
 
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -80,7 +81,8 @@ impl Default for Settings {
             share_domains: false,
             review_hours: 24,
             spread_minutes: 120,
-            logs_dir: probe::default_logs_dir().display().to_string(),
+            // The app's own (`Host::default_logs_dir`), set by `Core::load`.
+            logs_dir: String::new(),
             consented: None,
         }
     }
@@ -180,6 +182,7 @@ pub struct Persisted {
 
 pub struct Core {
     path: PathBuf,
+    pub host: Arc<dyn Host>,
     pub p: Persisted,
     pub config: Option<(i64, Config)>,
     pub last_error: Option<String>,
@@ -212,7 +215,7 @@ pub struct View {
 }
 
 impl Core {
-    pub fn load(dir: &Path) -> Core {
+    pub fn load(dir: &Path, host: Arc<dyn Host>) -> Core {
         let path = dir.join("state.json");
         let mut p: Persisted = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         // Saved before the defaults existed, and never enrolled.
@@ -220,7 +223,10 @@ impl Core {
             p.settings.server = DEFAULT_SERVER.into();
             p.settings.relay = DEFAULT_RELAY.into();
         }
-        Core { path, p, config: None, last_error: None, probe: ProbeStatus::default(), cache: local::Cache::default(), send_now: None }
+        if p.settings.logs_dir.is_empty() {
+            p.settings.logs_dir = host.default_logs_dir().display().to_string();
+        }
+        Core { path, host, p, config: None, last_error: None, probe: ProbeStatus::default(), cache: local::Cache::default(), send_now: None }
     }
 
     pub fn save(&self) -> Result<()> {
@@ -257,12 +263,16 @@ impl Core {
             observer: self.p.settings.observer(),
             cycle: self.cycle(),
             probe: self.probe.clone(),
-            probe_installed: probe::installed(),
-            probe_outdated: probe::service_outdated(self.probe.tool.as_deref()),
-            paused: probe::is_paused(&self.p.settings.logs()),
-            os: std::env::consts::OS,
+            probe_installed: self.host.capture_installed(),
+            probe_outdated: self.host.capture_outdated(self.probe.tool.as_deref()),
+            paused: self.host.paused(&self.p.settings.logs()),
+            os: self.host.os(),
             config: self.config.as_ref().map(|c| c.1.clone()),
-            current: self.current_report().cloned(),
+            // The window needs no tokens: the queue stays here.
+            current: self.current_report().cloned().map(|mut r| {
+                r.queue.clear();
+                r
+            }),
             reports: self.p.reports.values().rev().cloned().map(|mut r| {
                 r.queue.clear();
                 r
@@ -463,6 +473,7 @@ pub fn schedule(core: &mut Core, epoch: u32, p: Prepared, spread: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::host;
     use peersig_proto::EpochSpec;
     use peersig_server::{api, db, system_clock, State};
     use std::io::Write;
@@ -472,7 +483,7 @@ mod tests {
     #[test]
     fn send_now_applies_to_one_report() {
         let tmp = std::env::temp_dir().join(format!("peersig-send-now-{}", std::process::id()));
-        let mut core = Core::load(&tmp);
+        let mut core = Core::load(&tmp, host());
         core.p.settings.code = "K7QF-2M9D-XW4P".into();
         core.p.settings.consented = Some("now".into());
         let t = now();
@@ -536,7 +547,7 @@ mod tests {
         }
         drop(f);
 
-        let mut core = Core::load(&tmp);
+        let mut core = Core::load(&tmp, host());
         core.p.settings = Settings {
             server: url,
             relay: String::new(),
@@ -621,7 +632,7 @@ mod tests {
         }
         drop(f);
 
-        let mut core = Core::load(&tmp);
+        let mut core = Core::load(&tmp, host());
         core.p.settings = Settings {
             server: url,
             relay: String::new(),

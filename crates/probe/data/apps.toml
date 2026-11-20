@@ -2,6 +2,9 @@
 #
 # [[browser]]: `bundle_id` matches the app's bundle id exactly or as a prefix
 # followed by a dot (com.google.Chrome covers com.google.Chrome.canary).
+# On Android it is the package name (org.mozilla.firefox is Firefox's on
+# both); an Android app that opens any web address is a browser even when
+# it is not listed (crates/android/src/apps.rs).
 # `family` names the browser; the engine is detected from the bundle
 # (frameworks, XUL, WebKit) and is not listed here. Windows and Linux
 # match `exe` (file name, case-insensitive) instead. A browser that is not
@@ -17,7 +20,7 @@
 #
 # Bump `version` on every change.
 
-version = "2026-11-17.1"
+version = "2026-11-20.1"
 
 resolvers = ["mDNSResponder", "systemd-resolved", "systemd-resolve", "dnsmasq", "unbound", "named", "dnscache", "svchost.exe"]
 
@@ -127,6 +130,153 @@ family = "orion"
 bundle_id = "org.mozilla.thunderbird"
 family = "thunderbird"
 exe = ["thunderbird.exe", "thunderbird"]
+
+# Android packages. Firefox's (org.mozilla.firefox) and Tor Browser's
+# (org.torproject.torbrowser) are listed above.
+
+[[browser]]
+bundle_id = "com.android.chrome"
+family = "chrome"
+
+[[browser]]
+bundle_id = "com.chrome.beta"
+family = "chrome"
+
+[[browser]]
+bundle_id = "com.chrome.dev"
+family = "chrome"
+
+[[browser]]
+bundle_id = "com.chrome.canary"
+family = "chrome"
+
+[[browser]]
+bundle_id = "org.chromium.chrome"
+family = "chromium"
+
+[[browser]]
+bundle_id = "org.cromite.cromite"
+family = "chromium"
+
+[[browser]]
+bundle_id = "org.bromite.bromite"
+family = "chromium"
+
+[[browser]]
+bundle_id = "com.kiwibrowser.browser"
+family = "chromium"
+
+[[browser]]
+bundle_id = "com.android.browser"
+family = "aosp"
+
+[[browser]]
+bundle_id = "com.microsoft.emmx"
+family = "edge"
+
+[[browser]]
+bundle_id = "com.brave.browser"
+family = "brave"
+
+[[browser]]
+bundle_id = "com.brave.browser_beta"
+family = "brave"
+
+[[browser]]
+bundle_id = "com.brave.browser_nightly"
+family = "brave"
+
+[[browser]]
+bundle_id = "com.opera.browser"
+family = "opera"
+
+[[browser]]
+bundle_id = "com.opera.mini.native"
+family = "opera"
+
+[[browser]]
+bundle_id = "com.opera.gx"
+family = "opera-gx"
+
+[[browser]]
+bundle_id = "com.vivaldi.browser"
+family = "vivaldi"
+
+[[browser]]
+bundle_id = "com.sec.android.app.sbrowser"
+family = "samsung"
+
+[[browser]]
+bundle_id = "org.mozilla.firefox_beta"
+family = "firefox"
+
+[[browser]]
+bundle_id = "org.mozilla.fenix"
+family = "firefox"
+
+[[browser]]
+bundle_id = "org.mozilla.fennec_aurora"
+family = "firefox"
+
+[[browser]]
+bundle_id = "org.mozilla.fennec_fdroid"
+family = "firefox"
+
+[[browser]]
+bundle_id = "org.mozilla.focus"
+family = "firefox"
+
+[[browser]]
+bundle_id = "org.mozilla.klar"
+family = "firefox"
+
+[[browser]]
+bundle_id = "io.github.forkmaintainers.iceraven"
+family = "firefox"
+
+[[browser]]
+bundle_id = "org.ironfoxoss.ironfox"
+family = "firefox"
+
+[[browser]]
+bundle_id = "org.torproject.torbrowser_alpha"
+family = "tor"
+
+[[browser]]
+bundle_id = "com.duckduckgo.mobile.android"
+family = "duckduckgo"
+
+[[browser]]
+bundle_id = "com.ecosia.android"
+family = "ecosia"
+
+[[browser]]
+bundle_id = "com.yandex.browser"
+family = "yandex"
+
+[[browser]]
+bundle_id = "com.UCMobile.intl"
+family = "uc"
+
+[[browser]]
+bundle_id = "com.mi.globalbrowser"
+family = "mi"
+
+[[browser]]
+bundle_id = "com.huawei.browser"
+family = "huawei"
+
+[[browser]]
+bundle_id = "com.heytap.browser"
+family = "heytap"
+
+[[browser]]
+bundle_id = "com.aloha.browser"
+family = "aloha"
+
+[[browser]]
+bundle_id = "mark.via.gp"
+family = "via"
 
 [[stack]]
 match = "libboringssl"

@@ -1,8 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/probe", "crates/proto", "crates/server", "crates/relay", "crates/headless", "crates/app"]
+members = ["crates/probe", "crates/proto", "crates/server", "crates/relay", "crates/headless", "crates/client", "crates/app", "crates/android"]
 # The app needs a desktop toolchain (WebKit/GTK); build it with -p peersig-app.
-default-members = ["crates/probe", "crates/proto", "crates/server", "crates/relay", "crates/headless"]
+# The Android app's library is built with cargo-ndk (docs/android.md); its
+# host tests run with -p peersig-android.
+default-members = ["crates/probe", "crates/proto", "crates/server", "crates/relay", "crates/headless", "crates/client"]
 
 [workspace.package]
 version = "0.1.10"

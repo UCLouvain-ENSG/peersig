@@ -4,7 +4,7 @@
 
 PeerSig tells which applications send which TLS fingerprints. Volunteers run
 a small app that watches the start of every encrypted connection their
-computer makes (the TLS or QUIC ClientHello), computes its
+computer or phone makes (the TLS or QUIC ClientHello), computes its
 [JA4](https://github.com/FoxIO-LLC/ja4/blob/main/technical_details/JA4.md)
 fingerprint, and finds the application behind it: name, version, browser
 engine, TLS library. Once a week, the app contributes these
@@ -53,7 +53,7 @@ Get an enrollment code on the study's page,
 the UCLouvain network (or its VPN), or by e-mail, or with a GitHub account. The code only keeps the collection closed to people who
 are not taking part; it does not identify your ballots. Then download the
 app from the [releases](https://github.com/UCLouvain-ENSG/peersig/releases)
-page (macOS `.dmg`, Linux `.deb` or `.rpm`, Windows `.msi`), open it and enter the
+page (macOS `.dmg`, Linux `.deb` or `.rpm`, Windows `.msi`, Android `.apk`), open it and enter the
 code: the server and relay addresses are filled in. On macOS and Windows,
 the app installs its capture service once; the system asks for an
 administrator's password or consent. Installing a newer PeerSig does not
@@ -69,6 +69,11 @@ and what was sent before.
 The release builds are not signed by Apple yet: the first time, macOS refuses
 to open the app. Open *System Settings → Privacy & Security* and choose
 *Open Anyway*.
+
+On Android, PeerSig captures through a VPN of its own, which stays on the
+phone and forwards every connection unchanged: Android asks once whether
+to allow it, and a notification stands for the tray icon. See
+[docs/android.md](docs/android.md).
 
 ## For researchers: running a collection
 
@@ -129,10 +134,21 @@ cargo build --locked --release -p peersig-probe
 copy target\release\peersig-probe.exe crates\app\binaries\peersig-probe-x86_64-pc-windows-msvc.exe
 ```
 
+The Android app needs the Android SDK and NDK, JDK 17 and
+[cargo-ndk](https://github.com/bbqsrc/cargo-ndk); Gradle builds the native
+library with it ([docs/android.md](docs/android.md#building)):
+
+```sh
+cargo test -p peersig-android                  # the native side, on the computer
+(cd android && ./gradlew assembleDebug)       # app/build/outputs/apk/debug/app-debug.apk
+```
+
 | Crate | What |
 | --- | --- |
-| [`crates/probe`](crates/probe) | Capture daemon: JA4 of every ClientHello (TCP, QUIC, DTLS), and the process and application behind it. Writes local logs; never uses the network. See its [README](crates/probe/README.md). |
-| [`crates/app`](crates/app) | Tray app (Tauri): shows the logs, lets the participant remove items, sends the weekly ballots. |
+| [`crates/probe`](crates/probe) | Capture daemon: JA4 of every ClientHello (TCP, QUIC, DTLS), and the process and application behind it. Writes local logs; never uses the network. A library too, for the Android app. See its [README](crates/probe/README.md). |
+| [`crates/app`](crates/app) | Tray app (Tauri): shows the logs, lets the participant remove items, sends the weekly ballots. Its window (`crates/app/ui`) is the Android app's too. |
+| [`crates/client`](crates/client) | The participant's side, shared by the desktop and Android apps: settings, the report cycle, the window's commands. |
+| [`crates/android`](crates/android), [`android`](android) | The Android app: the capture behind its own VPN (the probe's pipeline, apps named by uid), and the Gradle project ([docs/android.md](docs/android.md)). |
 | [`crates/proto`](crates/proto) | What a ballot may contain, tokens, OHTTP, wire format, client. |
 | [`crates/server`](crates/server) | Collection server: token issuance, OHTTP gateway, counters, release. |
 | [`crates/relay`](crates/relay) | OHTTP relay. |
@@ -152,7 +168,9 @@ in the TCP and UDP tables; applications are named by their version
 resources and MSIX packages, svchost processes by the service they run
 (`wuauserv`, `BITS`, `DoSvc`), WebView2 and Electron helpers are credited to
 their app. A first live capture on Windows 11 attributed 17 of 20
-ClientHellos; it has not been tested in the field.
+ClientHellos; it has not been tested in the field. Android (10 and later)
+captures through the app's own VPN and credits each ClientHello to the app
+the system names by uid; it has run on an emulator, not in the field yet.
 
 ## License
 

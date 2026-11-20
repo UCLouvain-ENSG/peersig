@@ -1,5 +1,7 @@
 // PeerSig window. All data is inserted with textContent, never as HTML:
-// application names come from executables on this computer.
+// application names come from executables on this computer. The Android
+// app shows it too, in a WebView (android/app/src/main/ui/android.js
+// stands in for Tauri): `state.os` is then "android".
 "use strict";
 
 const { invoke } = window.__TAURI__.core;
@@ -42,6 +44,11 @@ function isObserverCode(s) {
   const n = s.toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1");
   return n.length === 15 && n.startsWith("0BS");
 }
+// The Android app: a phone, its own VPN for a capture, packages for apps.
+const android = () => !!state && state.os === "android";
+const device = () => (android() ? "phone" : "computer");
+// What an item names of an application (Android has no signing team or engine).
+const appFields = () => (android() ? "name, package name, version, kind" : "name, bundle id, version, signing team, kind, engine");
 function hours(sec) {
   if (sec <= 0) return "now";
   const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
@@ -99,7 +106,7 @@ function renderEnroll() {
   const code = el("input", { type: "text", placeholder: "XXXX-XXXX-XXXX", autocomplete: "off" });
   const observerNote = el("div", { class: "notice", hidden: true },
     el("strong", {}, "Dedicated observer code. "),
-    "This computer will report every day, in one report the server knows comes from this observer, and each day's items are published as they are, without waiting for other participants. Use it only on a machine set up for the study, whose traffic may be published.");
+    `This ${device()} will report every day, in one report the server knows comes from this observer, and each day's items are published as they are, without waiting for other participants. Use it only on a machine set up for the study, whose traffic may be published.`);
   code.addEventListener("input", () => (observerNote.hidden = !isObserverCode(code.value)));
   const getCode = el("button", { class: "btn", type: "button" }, "Get a code…");
   getCode.addEventListener("click", () => call("open_url", { url: server.value.trim() }));
@@ -121,13 +128,14 @@ function renderEnroll() {
   });
   return el("div", { class: "card" },
     el("h2", {}, "Join the study"),
-    el("p", {}, "PeerSig watches the start of the encrypted connections this computer makes (the TLS “ClientHello”), notes which application made each one, and once a week contributes that list to a research study."),
-    el("p", {}, "What it sends: the applications (name, bundle id, version, signing team, kind, browser engine), the fingerprint (JA4) of their handshakes, and the system with its major version (macOS 27, Ubuntu 24); if you choose, the server names non-browser applications connect to. Builds of one version line are merged first (2.1.322 and 2.1.326 go as 2.1.*). Never: addresses, the sites you visit, times, file paths or your name. Each item travels as a separate anonymous ballot that the server cannot tie to you or to your other items. Each week you get a day to look at the list and remove anything before it is sent."),
+    el("p", {}, `PeerSig watches the start of the encrypted connections this ${device()} makes (the TLS “ClientHello”), notes which application made each one, and once a week contributes that list to a research study.`),
+    android() ? el("p", {}, "On a phone, PeerSig sees other apps' connections through a VPN of its own. That VPN stays on the phone: it forwards every connection, unchanged, to where it was going, and only looks at the start of encrypted connections. No VPN server is involved, and PeerSig's own traffic does not go through it.") : null,
+    el("p", {}, `What it sends: the applications (${android() ? appFields() : "name, bundle id, version, signing team, kind, browser engine"}), the fingerprint (JA4) of their handshakes, and the system with its major version (${android() ? "Android 15" : "macOS 27, Ubuntu 24"}); if you choose, the server names non-browser applications connect to. Builds of one version line are merged first (2.1.322 and 2.1.326 go as 2.1.*). Never: addresses, the sites you visit, times, file paths or your name. Each item travels as a separate anonymous ballot that the server cannot tie to you or to your other items. Each week you get a day to look at the list and remove anything before it is sent.`),
     el("label", { class: "field" }, el("span", {}, "Collection server"), server),
     el("label", { class: "field" }, el("span", {}, "Relay (hides your address from the server)"), relay),
     el("label", { class: "field" }, el("span", {}, "Enrollment code"), code),
     observerNote,
-    el("p", { class: "muted small" }, "The study's web page gives you a code: in one click from the university's network, or by e-mail, or with a GitHub account. The code only lets this computer send a limited number of anonymous ballots each week, so that nobody else can flood the study; it does not identify your ballots."),
+    el("p", { class: "muted small" }, `The study's web page gives you a code: in one click from the university's network, or by e-mail, or with a GitHub account. The code only lets this ${device()} send a limited number of anonymous ballots each week, so that nobody else can flood the study; it does not identify your ballots.`),
     el("div", { class: "row" }, getCode),
     el("label", { class: "check" }, domains,
       el("span", {}, "Also share the server names (SNI) that non-browser applications connect to, each with its fingerprint (e.g. Teams connecting to teams.microsoft.com). Browsers' names are never collected: no browsing history. You can change this later.")),
@@ -138,7 +146,32 @@ function renderEnroll() {
 
 // ------------------------------------------------------------ overview
 
+// Android: the capture is PeerSig's own VPN (CaptureService), not a service
+// to install.
+function androidCaptureCard() {
+  const p = state.probe;
+  const body = [];
+  const start = (label) => el("button", { class: "btn primary", onclick: async () => { await call("install_probe"); refresh(); } }, label);
+  if (!state.probe_installed) {
+    body.push(el("div", { class: "big bad" }, "Not started"));
+    body.push(el("p", { class: "muted" }, "PeerSig sees other apps' connections through a VPN of its own, which stays on this phone and forwards everything unchanged. Android asks once for your permission."));
+    body.push(el("div", { class: "row" }, start("Allow and start")));
+    return el("div", { class: "card" }, el("h2", {}, "Capture"), ...body);
+  }
+  if (state.paused) body.push(el("div", { class: "big warn" }, "Paused"), el("p", { class: "muted" }, "PeerSig's VPN is off: nothing is being looked at."), p.error ? el("p", { class: "muted small" }, p.error) : null);
+  else if (p.running) body.push(el("div", { class: "big ok" }, "Capturing"), el("p", { class: "muted small" }, "Through PeerSig's VPN, on this phone only."));
+  else if (p.error) body.push(el("div", { class: "big bad" }, "Cannot capture"), el("p", { class: "muted" }, p.error), el("div", { class: "row" }, start("Start capture")));
+  else body.push(el("div", { class: "big bad" }, "Not running"), el("p", { class: "muted" }, "PeerSig's VPN is not on."), el("div", { class: "row" }, start("Start capture")));
+  body.push(el("p", {}, `${p.hellos.toLocaleString()} handshakes seen since ${iso(p.started)}`, el("br"), el("span", { class: "muted small" }, `Last: ${iso(p.last_hello)}`)));
+  body.push(el("div", { class: "row" },
+    el("button", { class: "btn", onclick: () => call("set_paused", { paused: !state.paused }).then(refresh) }, state.paused ? "Resume capture" : "Pause capture"),
+    el("button", { class: "btn", onclick: () => call("open_logs") }, "Export local logs"),
+  ));
+  return el("div", { class: "card" }, el("h2", {}, "Capture"), ...body);
+}
+
 function captureCard() {
+  if (android()) return androidCaptureCard();
   const p = state.probe;
   const body = [];
   if (!state.probe_installed) {
@@ -208,10 +241,10 @@ function connectionCard() {
     el("h2", {}, "Connection"),
     el("p", {}, "Server: ", el("span", { class: "mono" }, s.server)),
     state.observer
-      ? el("div", { class: "notice" }, "Dedicated observer: this computer reports every day, and its items are published daily, without threshold.")
+      ? el("div", { class: "notice" }, `Dedicated observer: this ${device()} reports every day, and its items are published daily, without threshold.`)
       : s.relay
         ? el("p", {}, "Relay: ", el("span", { class: "mono" }, s.relay))
-        : el("div", { class: "notice" }, "No relay: the server sees this computer's address when ballots arrive (not what they contain to whom)."),
+        : el("div", { class: "notice" }, `No relay: the server sees this ${device()}'s address when ballots arrive (not what they contain to whom).`),
     el("p", { class: "muted small" }, `Enrollment code ${s.code}`),
     state.last_error ? el("div", { class: "notice error small" }, state.last_error) : null,
   );
@@ -264,10 +297,10 @@ function renderItems() {
   return el("div", {},
     head,
     el("p", { class: "muted" }, `${what}. ${items.items.length} items.`),
-    el("table", {},
+    el("div", { class: "scroll" }, el("table", {},
       el("thead", {}, el("tr", {}, el("th", {}, "Send"), el("th", {}, "Application"), el("th", {}, "What"), el("th", {}, "Seen ¹"), el("th", {}, "Processes ¹"))),
-      el("tbody", {}, rows.length ? rows : el("tr", {}, el("td", { colspan: 5, class: "muted" }, "Nothing yet.")))),
-    el("p", { class: "muted small" }, `¹ Stays on this computer: how often, and which processes. Everything else in a ticked row is sent, as shown: the application (name, version, kind, engine, bundle id, signing team), the transport and fingerprint, and the server name of a “connection to” row (those carry no version). Each item also gives the system and its major version${os ? ` (${os})` : ""}. Once per ${unit()}, however often it was seen.`),
+      el("tbody", {}, rows.length ? rows : el("tr", {}, el("td", { colspan: 5, class: "muted" }, "Nothing yet."))))),
+    el("p", { class: "muted small" }, `¹ Stays on this ${device()}: how often, and which ${android() ? "apps" : "processes"}. Everything else in a ticked row is sent, as shown: the application (${android() ? appFields() : "name, version, kind, engine, bundle id, signing team"}), the transport and fingerprint, and the server name of a “connection to” row (those carry no version). Each item also gives the system and its major version${os ? ` (${os})` : ""}. Once per ${unit()}, however often it was seen.`),
     el("p", { class: "muted small" },
       `Not collected: ${sk.unattributed} handshakes with no known application; ${sk.browser_domains} names contacted by browsers (browsing history is never collected)` +
       (state.settings.share_domains ? `; ${sk.private_domains} local or private names; ${sk.not_sni} names seen only in DNS or plain HTTP.` : `; ${sk.domains_off} server names (sharing is off).`)),
@@ -299,17 +332,23 @@ function renderHistory() {
 
 function renderObserverPrivacy() {
   return el("div", { class: "card" },
-    el("h2", {}, "This computer is a dedicated observer"),
+    el("h2", {}, `This ${device()} is a dedicated observer`),
     el("ul", { class: "plain" },
-      el("li", {}, el("strong", {}, "What is sent. "), "Each day (UTC): which applications (name, bundle id, version, signing team, kind, engine) sent which handshake fingerprint, on which system and major version; if sharing is on, the server names non-browser applications connected to. No addresses, times, counts, file paths, user or host names."),
-      el("li", {}, el("strong", {}, "Not anonymous. "), "The day's items go in one report with this computer's observer code: the server knows they come from this observer. It keeps a count per item and day, and which observers reported which day."),
+      el("li", {}, el("strong", {}, "What is sent. "), `Each day (UTC): which applications (${appFields()}) sent which handshake fingerprint, on which system and major version; if sharing is on, the server names non-browser applications connected to. No addresses, times, counts, file paths, user or host names.`),
+      el("li", {}, el("strong", {}, "Not anonymous. "), `The day's items go in one report with this ${device()}'s observer code: the server knows they come from this observer. It keeps a count per item and day, and which observers reported which day.`),
       el("li", {}, el("strong", {}, "Published daily. "), "Each day's items are published with the number of observers that reported them, without waiting for other participants."),
       el("li", {}, el("strong", {}, "Review. "), state.settings.review_hours ? `Each day's list waits ${state.settings.review_hours} hours before it is sent; untick anything.` : "No review: each day's list is sent shortly after midnight UTC. Settings can add one."),
       el("li", {}, el("strong", {}, "Apart from participants. "), "Observers' items never count towards the participants' table."),
-      el("li", {}, el("strong", {}, "Local logs. "), "The capture logs stay on this computer and are deleted after two weeks."),
+      el("li", {}, el("strong", {}, "Local logs. "), `The capture logs stay on this ${device()} and are deleted after two weeks.`),
+      android() ? vpnPrivacy() : null,
     ),
     el("div", { class: "row" }, el("button", { class: "btn", onclick: () => call("open_url", { url: "https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/observers.md" }) }, "About observers")),
   );
+}
+
+// Android: what the VPN does, and does not.
+function vpnPrivacy() {
+  return el("li", {}, el("strong", {}, "A VPN that stays on the phone. "), "Android shows other apps' connections only to a VPN, so PeerSig runs one of its own. It forwards every connection, unchanged, to where it was going, and keeps a copy of the start of encrypted connections only, for the local logs. No VPN server is involved: your traffic goes out as it would without PeerSig. Android shows a key icon while it is on.");
 }
 
 function renderPrivacy() {
@@ -318,14 +357,15 @@ function renderPrivacy() {
   return el("div", { class: "card" },
     el("h2", {}, "How your data is protected"),
     el("ul", { class: "plain" },
-      el("li", {}, el("strong", {}, "Little leaves your computer. "), "Per week: which applications (name, bundle id, version, signing team, kind, engine) sent which handshake fingerprint, on which system and major version. Optional: the server names (SNI) non-browser applications connect to, with the fingerprint used. No addresses, times, counts, file paths, user or host names."),
+      el("li", {}, el("strong", {}, `Little leaves your ${device()}. `), `Per week: which applications (${appFields()}) sent which handshake fingerprint, on which system and major version. Optional: the server names (SNI) non-browser applications connect to, with the fingerprint used. No addresses, times, counts, file paths, user or host names.`),
       el("li", {}, el("strong", {}, "Less specific items. "), "Before you review them, items that differ only in a detail are merged: versions after major.minor (2.1.322 and 2.1.326 go as 2.1.*) and numbered server names (p177-fmip.icloud.com and p63-fmip.icloud.com go as p*-fmip.icloud.com). A rare build points to fewer people, and more items fit the weekly budget. An item you remove is never merged into another."),
       el("li", {}, el("strong", {}, "You review it first. "), `Each week's list waits ${state.settings.review_hours} hours before it is sent; untick anything.`),
       el("li", {}, el("strong", {}, "Anonymous ballots. "), "Every item is a separate ballot carrying a token the server signed without seeing it (blind signature, as in anonymous e-voting). The server knows the ballot comes from an enrolled participant, not which one, nor which ballots come from the same person."),
       el("li", {}, el("strong", {}, "Hidden address. "), state.settings.relay ? "Ballots go through a relay: it sees your address but not the content; the server sees the content but not your address. This hides who sends what as long as the relay and the server are run by different parties." : "No relay is configured: the server could see your address when ballots arrive."),
       el("li", {}, el("strong", {}, "Thresholds. "), c ? `The study publishes an item only once at least ${c.k_hello} participants reported it in the same week (${c.k_domain} for server names).` : "Items are published only above a participant threshold."),
       el("li", {}, el("strong", {}, "Counts only. "), "The server keeps one counter per item and week: no individual ballots, no arrival times."),
-      el("li", {}, el("strong", {}, "Local logs. "), "The capture logs stay on this computer and are deleted after two weeks."),
+      el("li", {}, el("strong", {}, "Local logs. "), `The capture logs stay on this ${device()} and are deleted after two weeks.`),
+      android() ? vpnPrivacy() : null,
     ),
     c ? el("p", { class: "muted small" }, `Token key for this week: ${c.token_key.key_id}. The app checks that the server signs with the key everyone sees, and that the relay and the server publish the same encryption key.`) : null,
     c && c.about_url ? el("div", { class: "row" }, el("button", { class: "btn", onclick: () => call("open_url", { url: c.about_url }) }, "About this study")) : null,
@@ -364,11 +404,11 @@ function renderSettings() {
       state.observer ? null : el("label", { class: "field" }, el("span", {}, "Spread the ballots over (minutes)"), spread),
       el("div", { class: "row" }, save)),
     el("div", { class: "card" },
-      el("h2", {}, "This computer"),
-      el("label", { class: "check" }, auto, el("span", {}, "Start PeerSig when I log in (it sends nothing while it is not running)")),
+      el("h2", {}, `This ${device()}`),
+      el("label", { class: "check" }, auto, el("span", {}, android() ? "Start PeerSig when the phone starts (it sends nothing while it is not running)" : "Start PeerSig when I log in (it sends nothing while it is not running)")),
       el("p", { class: "muted small" }, "Local logs: ", el("span", { class: "mono" }, s.logs_dir)),
       el("div", { class: "row" },
-        el("button", { class: "btn", onclick: () => call("open_logs") }, "Open logs"),
+        el("button", { class: "btn", onclick: () => call("open_logs") }, android() ? "Export logs" : "Open logs"),
         (state.os === "macos" || state.os === "windows") && state.probe_installed ? el("button", { class: "btn", onclick: async () => { await call("uninstall_probe"); refresh(); } }, "Remove capture service") : null)),
     el("div", { class: "card" },
       el("h2", {}, "Leave"),

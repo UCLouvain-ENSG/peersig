@@ -98,7 +98,12 @@ One JSON object per line, with these `type`s:
    macOS, procfs on Linux): `attribution` is `socket-table`. Only for a
    packet sent from one of the machine's own addresses: what it forwards or
    bridges (a router, a Wi-Fi access point, virtual machines) has no local
-   process, whatever port it uses (`not_local` in `stats`).
+   process, whatever port it uses (`not_local` in `stats`). The socket
+   must match the whole flow (both endpoints, or an unconnected UDP socket
+   on the source port), never the port number alone. On macOS the kernel
+   names the process of a sent packet only when the capture is read (for
+   interfaces such as Wi-Fi), so a connection that closed before then has
+   no process, and `lsof` usually cannot find its socket either.
 2. **Process to executable and app.** `proc_pidpath`, `KERN_PROCARGS2` (only
    Chromium's `--type` and an interpreter's script name are kept, never the
    full command line), the bundles around the executable with their
@@ -215,6 +220,12 @@ The capture, flow and fingerprint code is portable. What is per-OS
   on `tcp_connect`/`udp_sendmsg` for the per-packet process, and package
   versions from dpkg/rpm, Flatpak and Snap.
 - **Windows**: see below.
+- **Android**: no capture device and no process queries. The PeerSig app
+  feeds this crate's pipeline (as a library, `src/lib.rs`) with the
+  packets of its own VPN interface (link type raw IP), and names the app
+  behind each ClientHello by the uid the system gives
+  (`attrib::Owners`, `attribution` is `uid`). See
+  [docs/android.md](../../docs/android.md).
 
 ### Windows
 

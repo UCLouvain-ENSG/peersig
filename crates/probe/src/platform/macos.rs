@@ -102,7 +102,7 @@ fn resp_fn() -> Option<RespFn> {
 /// and hands back the bare packets. Apple's tcpdump calls it for `-k`. It is
 /// exported by libpcap but not declared in the SDK headers, hence dlsym.
 /// Must be called before the capture is activated. Returns false if absent.
-pub fn want_pktap(p: *mut c_void) -> bool {
+pub(crate) fn want_pktap(p: *mut c_void) -> bool {
     type F = unsafe extern "C" fn(*mut c_void, libc::c_int) -> libc::c_int;
     let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"pcap_set_want_pktap".as_ptr()) };
     if sym.is_null() {

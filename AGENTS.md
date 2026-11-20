@@ -8,8 +8,16 @@ product: a change that weakens one is a bug even if every test passes.
 - Only `peersig-proto::Item` crosses the network, one item per ballot. Adding
   a field to `Item` or `AppRef` changes what participants disclose: update
   docs/privacy.md, docs/protocol.md, the app's Privacy tab and its join
-  screen in the same change. `deny_unknown_fields` stays.
+  screen in the same change (the Android app shows the same window,
+  `crates/app/ui`: check its `android()` wording too). `deny_unknown_fields`
+  stays.
 - The probe never uses the network. The app is the only part that sends.
+  On Android the capture is the app's own VPN (docs/android.md): it
+  forwards the phone's connections unchanged, to where they were going,
+  and never sends, redirects or keeps traffic beyond the probe's local
+  logs; the app stays outside its VPN (`addDisallowedApplication`). Only
+  DNS to the VPN's own server goes elsewhere: to the network's DNS
+  servers, never another resolver.
 - The server never logs or stores request addresses or arrival times, and
   stores counters, not ballots. Keep tables `WITHOUT ROWID` and the journal
   out of WAL mode.
@@ -17,7 +25,10 @@ product: a change that weakens one is a bug even if every test passes.
 - The app and the headless `peersig` (crates/headless, docs/headless.md)
   build and send a participant's ballots with the same code
   (`peersig_proto::participant`): keep it shared. Both review a week
-  before sending it and send nothing while not running.
+  before sending it and send nothing while not running. The desktop and
+  Android apps share the rest of the participant's side
+  (`crates/client`: report cycle, worker, window commands, tray text);
+  each brings only a `Host` (its capture, its notifications).
 - Dedicated observers (`OBS-` codes, docs/observers.md) are published
   without threshold, so they stay apart from participants: no tokens for
   observer codes, no observer reports from participants' codes, and
@@ -69,7 +80,20 @@ product: a change that weakens one is a bug even if every test passes.
   CI.
 - `data/apps.toml`'s browser list decides which apps' server names are
   never collected: a browser missing there (by bundle id or, on Windows
-  and Linux, executable name) has its names treated like any app's.
+  and Linux, executable name) has its names treated like any app's. On
+  Android it lists package names; an app that opens any web address is a
+  browser too (`crates/android/src/apps.rs`).
+- The probe is a library as well (`crates/probe/src/lib.rs`): the Android
+  app feeds its pipeline the packets of its VPN and writes the same logs.
+  Keep pcap out of the Android build.
+- Android (docs/android.md): `cargo test -p peersig-android` runs the
+  native side's tests on the computer; the APK needs the SDK, NDK
+  27.3.13750724, JDK 17 and cargo-ndk (`cd android && ./gradlew
+  assembleDebug`). The native side calls Kotlin methods by name
+  (`Host`, `Native`): rename them on both sides, and do not turn on
+  shrinking. `rustls-platform-verifier` (TLS against Android's trust
+  store) needs its Android half: its version in Cargo.lock is the Maven
+  artifact's.
 
 ## Branches
 

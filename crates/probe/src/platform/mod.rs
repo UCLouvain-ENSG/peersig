@@ -2,6 +2,8 @@
 //! basics (no per-packet process metadata: the socket owner is looked up
 //! when a ClientHello is seen); Windows looks the socket owner up in the
 //! TCP and UDP tables, and names svchost processes by their services.
+//! Android has none: the system names the app that owns a connection
+//! (`attrib::Owners`).
 
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -94,9 +96,14 @@ mod windows;
 #[cfg(windows)]
 pub use windows::*;
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(target_os = "android")]
+mod android;
+#[cfg(target_os = "android")]
+pub use android::*;
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android", windows)))]
 mod other;
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android", windows)))]
 pub use other::*;
 
 /// Services hosted by a process: only Windows has them (svchost).

@@ -30,8 +30,9 @@ plist = "1"
 libc = "0.2"
 
 # Windows captures with the system's own packet capture (ETW), so that
-# nothing else needs installing: no libpcap there.
-[target.'cfg(not(windows))'.dependencies]
+# nothing else needs installing: no libpcap there. Android has no capture
+# device: the app's VPN interface feeds the pipeline (crates/android).
+[target.'cfg(not(any(windows, target_os = "android")))'.dependencies]
 pcap = "2"
 
 [target.'cfg(windows)'.dependencies]

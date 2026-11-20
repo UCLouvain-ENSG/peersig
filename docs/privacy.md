@@ -11,7 +11,10 @@ are.
 
 - **Participant**: runs the probe (capture, root on macOS, a LocalSystem
   service on Windows) and the app (user level, the only part that uses the
-  network).
+  network). On Android the capture is the app's own VPN, in the app
+  ([android.md](android.md)): it forwards the phone's traffic unchanged and
+  sends nothing of PeerSig's; the app's client still does all the sending,
+  outside that VPN.
 - **Server**: run by the study. Enrolls participants, issues tokens, counts
   ballots, publishes results.
 - **Relay**: run by someone else (another lab, the data protection officer,
@@ -26,10 +29,11 @@ are.
 
 Items (`crates/proto/src/item.rs`), at most once per item and week:
 
-- `hello`: the system and its major version (`macos 27`, `windows 11`; on
-  Linux the distribution's, `linux ubuntu 24`), transport (tcp, quic,
-  dtls), JA4, and the application: name, bundle id, version, code-signing
-  team, kind (browser, app, system, cli), engine.
+- `hello`: the system and its major version (`macos 27`, `windows 11`,
+  `android 15`; on Linux the distribution's, `linux ubuntu 24`), transport
+  (tcp, quic, dtls), JA4, and the application: name, bundle id (package
+  name on Android), version, code-signing team, kind (browser, app,
+  system, cli), engine. Android items have no team or engine.
 - `domain` (opt-in): the same application fields without version, a server
   name it put in a ClientHello (SNI), and the JA4 of that ClientHello: what
   anyone on the network path sees together. Never for browsers. Only SNI:
@@ -231,12 +235,23 @@ computer.
   stay on the computer, readable by the participant only, and are deleted
   after 14 days. On Windows they are in `%ProgramData%\PeerSig\logs`,
   readable by the participant and by the computer's administrators (as
-  root can read them on macOS).
+  root can read them on macOS). On Android they are in the app's private
+  storage, which other apps cannot read; the participant can export them.
 - **Windows app names.** Windows has no bundle ids: an application is
   named by its executable's version resource (product name and version),
   an MSIX app by its package, a Windows service host by its service name.
   These are the same fields as on macOS (`name`, `id`, `version`, `kind`,
   `engine`); `team_id` stays empty.
+- **Android.** The capture is a VPN that goes nowhere: it ends each
+  connection on the phone and opens the same one from the app, unchanged,
+  so it sees all the phone's traffic, as the probe sees a computer's. It
+  keeps what the probe keeps (local logs, in the app's private storage,
+  14 days) and adds no server. The app is named by the uid the system
+  gives for each connection: its label in English, package name and
+  version; `team_id` and `engine` stay empty. To name every app, the app
+  holds `QUERY_ALL_PACKAGES`. Apps showing web pages inside themselves
+  are not browsers: with sharing on, the names they contact are
+  collected, as an app's; the participant sees and can untick them.
 - **No noise.** Released supports are exact counts, and nothing hides
   whether a ballot is real: the protection is that ballots are unlinkable
   and that only items reported by *k* participants are published. A ballot

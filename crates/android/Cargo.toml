@@ -1,0 +1,37 @@
+[package]
+name = "peersig-android"
+description = "PeerSig on Android: the capture behind the app's own VPN, and the participant's side, for the Android app (android/)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# A shared library for the app (cargo-ndk, see docs/android.md); an rlib
+# for the host tests (cargo test -p peersig-android).
+[lib]
+name = "peersig_android"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+peersig-client = { path = "../client" }
+peersig-probe = { path = "../probe" }
+peersig-proto = { path = "../proto", features = ["client"] }
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
+
+[target.'cfg(unix)'.dependencies]
+# A userspace TCP/IP stack: ends the apps' connections at the VPN interface.
+ipstack = "1.0.1"
+libc = "0.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+# 0.22, as rustls-platform-verifier, whose Android side the app initializes.
+jni = "0.22"
+# reqwest checks certificates with Android's own trust store through it.
+rustls-platform-verifier = "0.7"

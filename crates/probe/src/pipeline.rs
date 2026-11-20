@@ -55,6 +55,49 @@ pub fn ts_string(ts: f64) -> String {
         .unwrap_or_default()
 }
 
+/// Now, as records write it.
+pub fn now_ts() -> String {
+    ts_string(chrono::Utc::now().timestamp_micros() as f64 / 1e6)
+}
+
+fn session_id() -> String {
+    let mut b = [0u8; 8];
+    match std::fs::File::open("/dev/urandom") {
+        Ok(mut f) => {
+            let _ = std::io::Read::read_exact(&mut f, &mut b);
+        }
+        Err(_) => {
+            // Windows: std seeds its hash keys from the system's random
+            // generator.
+            use std::hash::{BuildHasher, Hasher};
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+            b = h.finish().to_le_bytes();
+        }
+    }
+    b.iter().map(|x| format!("{:02x}", x)).collect()
+}
+
+/// The first record of every log file. `os` says what items carry
+/// (`peersig_proto::item::os_label`).
+pub fn start_record(device: &str, dlt: i32, filter: &str, live: bool, names: bool, db: &str) -> Value {
+    json!({
+        "type": "start",
+        "ts": now_ts(),
+        "tool": format!("peersig-probe {}", env!("CARGO_PKG_VERSION")),
+        "apps_db": db,
+        "session": session_id(),
+        // The capturing machine's OS; unknown for a capture file.
+        "os": if live { serde_json::to_value(crate::platform::os_info()).unwrap_or_default() } else { Value::Null },
+        "device": device,
+        // Link type: 149 or 258 is PKTAP, with a process on every packet.
+        "dlt": dlt,
+        "filter": filter,
+        "live": live,
+        "names": names,
+    })
+}
+
 fn endpoint(ip: &std::net::IpAddr, port: u16) -> String {
     match ip {
         std::net::IpAddr::V6(v6) => format!("[{}]:{}", v6, port),

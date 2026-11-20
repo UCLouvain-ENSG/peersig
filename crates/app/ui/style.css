@@ -94,3 +94,21 @@ details summary { cursor: pointer; }
 .segmented button[aria-pressed="true"] { background: var(--chip); }
 .card.stacked { margin-bottom: 10px; }
 .row.flush { margin-top: 0; }
+.scroll { overflow-x: auto; }
+/* Phones (the Android app). */
+@media (max-width: 600px) {
+  header { padding: 12px 14px 4px; }
+  nav { padding: 0 6px; overflow-x: auto; }
+  nav button { padding: 8px 9px; white-space: nowrap; }
+  main { padding: 12px 12px 32px; }
+  .grid { grid-template-columns: 1fr; }
+  td.mono, .mono { word-break: break-all; }
+  /* The items: one card per row, the box on the left. */
+  .scroll thead { display: none; }
+  .scroll table, .scroll tbody { display: block; }
+  .scroll tr { display: grid; grid-template-columns: 28px 1fr; column-gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .scroll td { display: block; border: 0; padding: 1px 0; grid-column: 2; }
+  .scroll td:first-child { grid-column: 1; grid-row: 1 / span 4; }
+  .scroll td:nth-child(4)::before { content: "Seen "; }
+  .scroll td[colspan] { grid-column: 1 / -1; }
+}
