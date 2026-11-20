@@ -143,6 +143,10 @@ struct WebArgs {
     /// A note shown at the top of the page, e.g. the limits of a pilot.
     #[arg(long, env = "PEERSIG_NOTICE")]
     notice: Option<String>,
+    /// Where the note says more (a "More on this" link after it), e.g.
+    /// /privacy#relay.
+    #[arg(long, env = "PEERSIG_NOTICE_URL")]
+    notice_url: Option<String>,
 }
 
 /// An empty variable (as in an env file) counts as unset.
@@ -268,7 +272,8 @@ fn main() -> Result<()> {
                     .collect();
             let admin = if enroll.admin_enabled() { format!("; /admin for {} GitHub account(s)", enroll.admins.len()) } else { String::new() };
             let state = State::new(conn, s.clone(), system_clock())?;
-            let app = api::router(state.clone()).merge(web::router(std::sync::Arc::new(web::Web { state, enroll, notice: set(&w.notice).map(String::from) })));
+            let notice = set(&w.notice).map(|text| web::Notice { text: text.into(), url: set(&w.notice_url).map(String::from) });
+            let app = api::router(state.clone()).merge(web::router(std::sync::Arc::new(web::Web { state, enroll, notice })));
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async move {
                 let l = tokio::net::TcpListener::bind(&listen).await.with_context(|| listen.clone())?;

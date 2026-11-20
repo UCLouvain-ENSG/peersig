@@ -87,12 +87,15 @@ async fn code_by_mail() {
     let mut e = Enrollment::new("https://peersig.example.org", Some("https://relay.example.net"), 3, 60);
     e.contact = Some("team@example.org".into());
     e.mail = Some(Mail::memory("PeerSig <peersig@example.org>", sent.clone()).unwrap());
-    let url = serve(api::router(state.clone()).merge(web::router(Arc::new(web::Web { state: state.clone(), enroll: e, notice: None })))).await;
+    let notice = web::Notice { text: "Pilot <phase>.".into(), url: Some("/privacy#relay".into()) };
+    let url = serve(api::router(state.clone()).merge(web::router(Arc::new(web::Web { state: state.clone(), enroll: e, notice: Some(notice) })))).await;
     let http = reqwest::Client::new();
 
     let home = http.get(format!("{}/participate", url)).send().await.unwrap().text().await.unwrap();
     assert!(home.contains(r#"action="/enroll/mail""#) && home.contains("flood"), "{}", home);
     assert!(home.contains("mailto:team@example.org"));
+    // The notice is text, with its link after it.
+    assert!(home.contains(r#"<p class="notice">Pilot &lt;phase&gt;. <a href="/privacy#relay">More on this</a>.</p>"#), "{}", home);
 
     // The home page and its assets, under a policy that allows no inline script.
     let r = http.get(&url).send().await.unwrap();

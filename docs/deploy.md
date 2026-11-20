@@ -74,6 +74,7 @@ The web page and enrollment from it (`serve` only):
 | `--enroll-per-address` | `PEERSIG_ENROLL_PER_ADDRESS` | 5 | Requests for a code by e-mail or GitHub per client address and hour, counted in memory only; 0: no limit |
 | `--admin-github` | `PEERSIG_ADMIN_GITHUB` | none | GitHub logins allowed into `/admin`, comma-separated (needs the GitHub app) |
 | `--notice` | `PEERSIG_NOTICE` | none | Shown at the top of the page, e.g. the limits of a pilot |
+| `--notice-url` | `PEERSIG_NOTICE_URL` | none | A "More on this" link after the notice, e.g. `/privacy#relay` |
 
 ## Relay
 

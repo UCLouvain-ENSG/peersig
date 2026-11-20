@@ -23,8 +23,14 @@ use crate::State;
 pub struct Web {
     pub state: Arc<State>,
     pub enroll: Enrollment,
-    /// Shown at the top of the pages (plain text), e.g. the limits of a pilot.
-    pub notice: Option<String>,
+    /// Shown at the top of the pages, e.g. the limits of a pilot.
+    pub notice: Option<Notice>,
+}
+
+/// The note at the top of the pages: plain text, and where it says more.
+pub struct Notice {
+    pub text: String,
+    pub url: Option<String>,
 }
 
 const LOGO: &str = include_str!("../../../assets/logo/peersig.svg");
@@ -145,7 +151,9 @@ fn sent() -> Response {
 }
 
 fn notice(w: &Web) -> String {
-    w.notice.as_deref().map(|n| format!(r#"<p class="notice">{}</p>"#, esc(n))).unwrap_or_default()
+    let Some(n) = &w.notice else { return String::new() };
+    let more = n.url.as_deref().map(|u| format!(r#" <a href="{}">More on this</a>."#, esc(u))).unwrap_or_default();
+    format!(r#"<p class="notice">{}{}</p>"#, esc(&n.text), more)
 }
 
 async fn index(AxState(w): AxState<Arc<Web>>) -> Response {
