@@ -108,6 +108,14 @@ async fn code_by_mail() {
     assert!(!home.contains("{{"), "unfilled placeholder");
     assert!(!home.contains("/enroll/github"), "GitHub is not configured");
 
+    // The privacy policy (the Android app links to it), with this server's numbers.
+    let r = http.get(format!("{}/privacy", url)).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let policy = r.text().await.unwrap();
+    assert!(policy.contains("<h1>Privacy policy</h1>") && policy.contains("mailto:team@example.org"), "{}", policy);
+    assert!(policy.contains("(at most 3)") && !policy.contains("{{"), "unfilled placeholder");
+    assert!(index.contains(r#"href="/privacy""#), "the footer links to the policy");
+
     let post = |email: &str| http.post(format!("{}/enroll/mail", url)).form(&[("email", email)]).send();
     let r = post("Alice+PeerSig@Example.org").await.unwrap();
     assert_eq!(r.status(), 200);

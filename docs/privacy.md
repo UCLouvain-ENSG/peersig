@@ -5,7 +5,9 @@ themselves describe software, not people. What could describe a person is
 **who** runs **which** software, and which names their applications contact.
 The design keeps that from the study's operators, as far as the scale of a
 study allows. This page says what each party learns, and where the limits
-are.
+are. The privacy policy for participants, which the apps link to, is the
+server's `/privacy` page (`crates/server/site/privacy.html`,
+<https://peersig.org/privacy>): keep the two in agreement.
 
 ## Parties
 
@@ -69,7 +71,7 @@ one from the server's web page:
 - **By e-mail.** The server sends the code to the address given. It keeps a
   keyed hash of the address (HMAC, with a key stored in the database) and
   how many codes it got, so that one address gets at most three (one per
-  computer). It does not keep the address, and nothing links the hash to
+  computer or phone). It does not keep the address, and nothing links the hash to
   the code. Plus-tags are folded (`alice+x@` counts as `alice@`).
 - **With GitHub.** GitHub's sign-in page asks for no permission: the server
   only reads the account's number and creation date (accounts younger than

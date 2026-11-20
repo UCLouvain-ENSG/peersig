@@ -7,7 +7,9 @@ product: a change that weakens one is a bug even if every test passes.
 
 - Only `peersig-proto::Item` crosses the network, one item per ballot. Adding
   a field to `Item` or `AppRef` changes what participants disclose: update
-  docs/privacy.md, docs/protocol.md, the app's Privacy tab and its join
+  docs/privacy.md, docs/protocol.md, the privacy policy
+  (`crates/server/site/privacy.html`, served at /privacy, with its date),
+  the app's Privacy tab and its join
   screen in the same change (the Android app shows the same window,
   `crates/app/ui`: check its `android()` wording too). `deny_unknown_fields`
   stays.

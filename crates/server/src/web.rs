@@ -1,5 +1,6 @@
 //! The site: the home page (what PeerSig is, how participants stay
-//! anonymous, what JA4 is), /participate (download, code, join), and the
+//! anonymous, what JA4 is), /participate (download, code, join), /privacy
+//! (the privacy policy, which the apps link to), and the
 //! enrollment pages (a code by e-mail, with a GitHub account, or from the
 //! institution's network). Pages and assets are compiled in. Like the API,
 //! no handler logs the client address. Enrollment looks at it to check the
@@ -32,6 +33,7 @@ const SITE_JS: &str = include_str!("../site/site.js");
 const HERO_JS: &str = include_str!("../site/hero.js");
 const INDEX: &str = include_str!("../site/index.html");
 const PARTICIPATE: &str = include_str!("../site/participate.html");
+const PRIVACY: &str = include_str!("../site/privacy.html");
 const SOURCE: &str = "https://github.com/UCLouvain-ENSG/peersig";
 
 pub(crate) fn esc(s: &str) -> String {
@@ -78,7 +80,7 @@ pub(crate) fn layout(title: &str, description: &str, active: &str, body: &str, s
 </main>
 <footer><div class="in">
   <span>PeerSig, a study of the <a href="https://github.com/UCLouvain-ENSG">Efficiency of Networked Systems Group</a>, UCLouvain. Apache-2.0.</span>
-  <span><a href="{SOURCE}/blob/main/docs/privacy.md">Privacy design</a> · <a href="/data">Published tables</a> · <a href="/data#observers">Observers' daily table</a> · <a href="{SOURCE}">Source code</a></span>
+  <span><a href="/privacy">Privacy policy</a> · <a href="{SOURCE}/blob/main/docs/privacy.md">Privacy design</a> ·<a href="/data">Published tables</a> · <a href="/data#observers">Observers' daily table</a> · <a href="{SOURCE}">Source code</a></span>
 </div></footer>
 </body>
 </html>"#,
@@ -209,6 +211,35 @@ async fn participate(AxState(w): AxState<Arc<Web>>) -> Response {
     html(
         StatusCode::OK,
         layout("Participate · PeerSig", "Download PeerSig, get a code, and join the study.", "/participate", &body, &["site.js"]),
+    )
+}
+
+/// The privacy policy, with this server's numbers. The apps link to it.
+async fn privacy(AxState(w): AxState<Arc<Web>>) -> Response {
+    let e = &w.enroll;
+    let st = &w.state.settings;
+    let contact = match e.contact.as_deref() {
+        Some(c) => format!(r#"<a href="mailto:{0}">{0}</a>"#, esc(c)),
+        None => format!(r#"the study through its <a href="{SOURCE}">source repository</a>"#),
+    };
+    let github_days = e.github.as_ref().map(|g| g.min_age_days).unwrap_or(30);
+    let body = PRIVACY
+        .replace("{{NOTICE}}", &notice(&w))
+        .replace("{{CONTACT}}", &contact)
+        .replace("{{TOKENS}}", &st.tokens_per_epoch.to_string())
+        .replace("{{K_HELLO}}", &st.k_hello.to_string())
+        .replace("{{K_DOMAIN}}", &st.k_domain.to_string())
+        .replace("{{PER_IDENTITY}}", &e.per_identity.to_string())
+        .replace("{{GITHUB_DAYS}}", &github_days.to_string());
+    html(
+        StatusCode::OK,
+        layout(
+            "Privacy policy · PeerSig",
+            "PeerSig's privacy policy: what the apps look at, what they send, who sees it, how long it is kept, and your rights.",
+            "/privacy",
+            &body,
+            &[],
+        ),
     )
 }
 
@@ -345,6 +376,7 @@ pub fn router(web: Arc<Web>) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/participate", get(participate))
+        .route("/privacy", get(privacy))
         .route("/assets/{name}", get(asset))
         .route("/enroll/mail", post(by_mail))
         .route("/enroll/network", post(by_network))

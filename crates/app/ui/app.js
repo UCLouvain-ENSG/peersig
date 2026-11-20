@@ -342,8 +342,14 @@ function renderObserverPrivacy() {
       el("li", {}, el("strong", {}, "Local logs. "), `The capture logs stay on this ${device()} and are deleted after two weeks.`),
       android() ? vpnPrivacy() : null,
     ),
-    el("div", { class: "row" }, el("button", { class: "btn", onclick: () => call("open_url", { url: "https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/observers.md" }) }, "About observers")),
+    el("div", { class: "row" }, policyButton(), el("button", { class: "btn", onclick: () => call("open_url", { url: "https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/observers.md" }) }, "About observers")),
   );
+}
+
+// The server's privacy policy (/privacy); peersig.org's before joining one.
+function policyButton() {
+  const server = (state.settings.server || "https://peersig.org").replace(/\/+$/, "");
+  return el("button", { class: "btn", onclick: () => call("open_url", { url: `${server}/privacy` }) }, "Privacy policy");
 }
 
 // Android: what the VPN does, and does not.
@@ -369,7 +375,7 @@ function renderPrivacy() {
     ),
     c ? el("p", { class: "muted small" }, `Token key for this week: ${c.token_key.key_id}. The app checks that the server signs with the key everyone sees, and that the relay and the server publish the same encryption key.`) : null,
     c && c.about_url ? el("div", { class: "row" }, el("button", { class: "btn", onclick: () => call("open_url", { url: c.about_url }) }, "About this study")) : null,
-    el("div", { class: "row" }, el("button", { class: "btn", onclick: () => call("open_url", { url: "https://github.com/UCLouvain-ENSG/peersig" }) }, "Source code")),
+    el("div", { class: "row" }, policyButton(), el("button", { class: "btn", onclick: () => call("open_url", { url: "https://github.com/UCLouvain-ENSG/peersig" }) }, "Source code")),
   );
 }
 

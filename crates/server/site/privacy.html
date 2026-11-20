@@ -1,0 +1,108 @@
+<!-- The privacy policy of peersig.org and of the PeerSig apps (the Android
+     app links here). It describes this deployment: the controller, the
+     pilot's relay, the enrollment methods. Another deployment must rewrite
+     it. docs/privacy.md has the design behind it. -->
+<section class="hero">
+  <div class="eyebrow">Privacy</div>
+  <h1>Privacy policy</h1>
+  <p class="lead">What PeerSig looks at on your computer or phone, what it sends, who sees it, how long it is kept, and your rights.</p>
+  {{NOTICE}}
+</section>
+
+<div class="policy">
+  <p class="updated">Last updated: 20 November 2026.</p>
+
+  <p>This policy covers the PeerSig apps (for macOS, Windows, Linux and Android, and the <code>peersig-headless</code> package for servers), this website, and the collection server and relay behind them.</p>
+
+  <h2>Who is responsible</h2>
+  <p>PeerSig is a research study developed and run by Tom Barbette, of the Efficiency of Networked Systems Group at UCLouvain (Belgium). He is responsible for the data described here (the data controller, under the GDPR). For any question or request about your data, write to {{CONTACT}}.</p>
+
+  <h2>In short</h2>
+  <ul>
+    <li>PeerSig learns which applications send which TLS fingerprints. To do so, it looks at how encrypted connections start on your computer or phone, never at what they carry.</li>
+    <li>Nothing leaves your device before you have seen it: each week's list waits a day for you to review it, and you can untick any item.</li>
+    <li>What is sent is a list of applications and fingerprints, as separate anonymous ballots that the server cannot link to you, nor to each other.</li>
+    <li>No advertising, no analytics, no tracking. Nothing is sold.</li>
+    <li>You can pause or leave the study at any time, from the app.</li>
+  </ul>
+
+  <h2>What PeerSig looks at on your device</h2>
+  <p>This stays on your computer or phone.</p>
+  <ul>
+    <li><b>The start of network connections.</b> On a computer, a capture service reads the packets that open connections. On Android, PeerSig sets up a VPN that stays on the phone: it forwards every connection unchanged through your usual network, with no VPN server, and reads the same packets. PeerSig reads the handshakes that start encrypted connections (TLS and QUIC: the server name and the parameters that make the fingerprint) and DNS answers. It decrypts nothing and does not read the content of your communications.</li>
+    <li><b>Which application opened each connection.</b> On a computer, the process: its name, version and code signature. On Android, the app's name, package name and version, which Android gives for each connection; to name every app, PeerSig may see the list of installed apps, and uses it for nothing else.</li>
+    <li><b>Local logs.</b> What was captured (server names, network addresses, applications) is written to logs on the device, readable by you (and, on a computer, by its administrators), and deleted after 14 days. On Android they are in the app's private storage, which other apps cannot read; you can export them.</li>
+  </ul>
+  <p>PeerSig does not access your location, contacts, photos, messages, accounts or advertising identifiers.</p>
+
+  <h2>What leaves your device</h2>
+  <p>Once a week, after your review, these items, each as a separate anonymous ballot:</p>
+  <ul>
+    <li><b>Applications and their fingerprints:</b> for each application that opened encrypted connections, its name, identifier (bundle id, or package name on Android), version, code-signing team, kind (browser, app, system, command line) and engine, with the fingerprint (JA4) of its handshakes, the transport (TCP, QUIC, DTLS), and your system and its major version (for instance <code>android 15</code>). Versions that differ only after major.minor are merged before you review them (2.1.322 and 2.1.326 go as 2.1.*).</li>
+    <li><b>Server names, only if you turn sharing on:</b> the names that applications other than browsers connect to, as anyone on the network path sees them, with the fingerprint used. Never for browsers, so never the sites you visit. Local and private names are left out, and random-looking parts are replaced by <code>*</code>.</li>
+    <li><b>That you took part</b> that week, and whether you share server names.</li>
+  </ul>
+  <p>Never sent: your network addresses, the sites you visit, times, how often you use anything, the content of your connections, file paths, user, device or host names.</p>
+
+  <h2>How your ballots stay anonymous</h2>
+  <ul>
+    <li><b>Unlinkable tokens.</b> Each ballot carries a token the server signed without seeing it (a blind signature, as in anonymous e-voting). The server can check that a ballot comes from an enrolled participant, but not from which one, nor which ballots come from the same person. Every participant asks for the same number of tokens each week ({{TOKENS}}).</li>
+    <li><b>A relay.</b> Ballots are encrypted for the server and sent through a relay (Oblivious HTTP): the relay sees your network address but not the ballot; the server sees the ballot but not your address. This protects you as long as the relay and the server are run by different parties. <b>During the pilot phase they are not</b>: the relay runs on the same machine as the server and is operated by the same person. Neither keeps logs of network addresses, but the relay does not yet hide your address from the study.</li>
+    <li><b>Counts only.</b> The server keeps one counter per item and week: no ballots, no arrival times.</li>
+    <li><b>Thresholds.</b> An item is published only once at least {{K_HELLO}} participants reported it in the same week ({{K_DOMAIN}} for server names). The study's operator can see counts below the threshold; they are not published.</li>
+  </ul>
+
+  <h2>Getting a code</h2>
+  <p>A code lets a computer or phone take part, so that nobody can flood the collection with made-up ballots. It does not identify your ballots.</p>
+  <ul>
+    <li><b>By e-mail.</b> The server sends the code to the address you give. PeerSig does not keep the address in its database: it keeps a keyed hash of it, and how many codes it received (at most {{PER_IDENTITY}}). Nothing links that hash to your code.</li>
+    <li><b>With GitHub.</b> PeerSig asks GitHub for no permission, and reads only your account's number and creation date (accounts younger than {{GITHUB_DAYS}} days are refused). It keeps a keyed hash of the number. GitHub knows that you signed in to PeerSig; GitHub's own privacy statement applies to that.</li>
+    <li><b>From the UCLouvain network.</b> The server checks that your connection comes from the university's network, and keeps nothing about you.</li>
+    <li><b>From the study team</b>, who can hand out codes directly.</li>
+  </ul>
+  <p>Against abuse, the server counts requests for codes per network address over an hour, in memory only, under a keyed hash whose key it replaces every hour; nothing is written. For each code, the server keeps a hash of the code, a label, the day it was made, and the weeks in which it asked for tokens (that is, took part). None of this is linked to any ballot. The study team can bar an e-mail address, a mail domain or a GitHub account from getting codes: a barred address or account is stored as the same keyed hash, a domain as it is.</p>
+
+  <h2>This website</h2>
+  <p>The site sets no cookies for visitors (only the study team's admin page uses a session cookie), runs no analytics and loads nothing from third parties. The web server keeps no access logs, and its error logs leave out visitors' addresses. When you ask for a code, your address is used as described above, then forgotten. The server is rented from OVHcloud (OVH SAS), in France.</p>
+
+  <h2>Who receives data</h2>
+  <ul>
+    <li><b>The study team</b>: the server's data described above.</li>
+    <li><b>Everyone</b>: the published tables (applications, fingerprints and, if shared, server names, reported by at least {{K_HELLO}} participants, with their counts). They are public research data: anyone can read, download and reuse them.</li>
+    <li><b>OVHcloud</b>, which hosts the server; <b>GitHub</b>, if you use it to get a code; and your <b>mail provider</b>, which receives the message with your code.</li>
+  </ul>
+  <p>Nobody else. PeerSig sells no data and shares none with advertisers or data brokers.</p>
+
+  <h2>Security</h2>
+  <ul>
+    <li>Everything is sent over HTTPS, and ballots are also encrypted end to end for the server (RFC 9458), so the relay cannot read them.</li>
+    <li>The app checks that the server signs every participant's tokens with the same key, and that the relay and the server publish the same encryption key.</li>
+    <li>The server's database holds hashes, not codes, e-mail addresses or GitHub accounts, and overwrites deleted records.</li>
+    <li>On your device, the local logs are protected by the system's permissions (the app's private storage on Android).</li>
+    <li>The <a href="https://github.com/UCLouvain-ENSG/peersig">source code</a> is public: anyone can check what PeerSig does.</li>
+  </ul>
+
+  <h2>How long data is kept</h2>
+  <ul>
+    <li><b>On your device:</b> capture logs are deleted after 14 days. Leaving the study in the app forgets your code and history, and can delete the local logs at once. Uninstalling the Android app deletes all its data.</li>
+    <li><b>On the server:</b> the weekly counts, the code hashes and participation weeks, and the e-mail and GitHub hashes (including bars) are kept until the end of the study. The server's database is then deleted. The published tables stay public, as open research data.</li>
+  </ul>
+
+  <h2>Your choices and rights</h2>
+  <ul>
+    <li>Taking part is voluntary and based on your consent, given in the app when you join. Each week you can review and untick items; you can turn server-name sharing on or off, pause the capture, or leave the study at any time from the app. Leaving withdraws your consent for the future.</li>
+    <li>Under the GDPR, you can ask for access to your personal data, its correction or deletion, or restrict or object to its use: write to {{CONTACT}}. Ballots are anonymous by design, so the study cannot find, show or delete the items you sent: nothing links them to you. It can revoke your code, and delete the hash kept for your e-mail address or GitHub account, if you send them.</li>
+    <li>You can lodge a complaint with the Belgian Data Protection Authority (<a href="https://www.dataprotectionauthority.be">dataprotectionauthority.be</a>), or with the authority of the country where you live.</li>
+  </ul>
+
+  <h2>Dedicated observers</h2>
+  <p>Machines run for the study with an observer code (lab servers, test machines) are not participants: they report every day, with their code, and their items are published as they are, without threshold. Observer codes are never used on anyone's own computer or phone. <a href="https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/observers.md">How they work</a>.</p>
+
+  <h2>Children</h2>
+  <p>PeerSig is a research study for adult volunteers. It is not meant for children.</p>
+
+  <h2>Changes</h2>
+  <p>The date at the top says when this policy last changed. Changes to what PeerSig collects are announced here and in the release notes of the version that brings them.</p>
+
+  <p class="muted small">More detail: the <a href="https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/privacy.md">privacy design</a>, which says what each party learns and where the limits are.</p>
+</div>
