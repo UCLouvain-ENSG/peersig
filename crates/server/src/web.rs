@@ -178,7 +178,7 @@ fn methods(e: &Enrollment) -> String {
         m.push_str(&format!(
             r#"<div class="method"><h3>By e-mail</h3>
 <form method="post" action="/enroll/mail"><input type="email" name="email" required maxlength="254" placeholder="you@example.org" autocomplete="email" aria-label="E-mail address"><button class="btn" type="submit">Send me a code</button></form>
-<p>The address is not kept: only a keyed hash, so that it gets at most {n} codes (one per computer). Nothing links it to your code.</p></div>"#,
+<p>The address is not kept: only a keyed hash, so that it gets at most {n} codes (one per computer or phone). Nothing links it to your code.</p></div>"#,
             n = e.per_identity
         ));
     }
@@ -287,7 +287,7 @@ fn show_code(_w: &Web, code: &str) -> Response {
         format!(
             r#"<div class="eyebrow">Your enrollment code</div>
 <p class="code-box">{code}</p>
-<p><b>Copy it now:</b> it is shown only once, and the server keeps a hash of it, not the code. One code per computer; keep it to yourself.</p>
+<p><b>Copy it now:</b> it is shown only once, and the server keeps a hash of it, not the code. One code per computer or phone; keep it to yourself.</p>
 <p class="cta"><a class="btn primary" href="/participate#join">Next: open PeerSig and paste it</a><a class="btn" href="/participate#download">Download PeerSig</a></p>"#,
             code = esc(code),
         ),
@@ -318,7 +318,7 @@ async fn github_callback(AxState(w): AxState<Arc<Web>>, Query(q): Query<Callback
         Ok(GitHubOutcome::Enough) => message(
             StatusCode::OK,
             "You have enough codes",
-            &format!("This GitHub account already received {} codes, the most one account can get. Use one of them (one per computer).", w.enroll.per_identity),
+            &format!("This GitHub account already received {} codes, the most one account can get. Use one of them (one per computer or phone).", w.enroll.per_identity),
         ),
         Ok(GitHubOutcome::TooYoung) => message(
             StatusCode::FORBIDDEN,

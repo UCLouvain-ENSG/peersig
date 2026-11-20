@@ -367,7 +367,7 @@ it and enter this code. The addresses are already filled in:
 
     Server: {server}{relay}
 
-One code per computer. Keep it to yourself: whoever has it can send
+One code per computer or phone. Keep it to yourself: whoever has it can send
 ballots in your place.
 
 The server keeps a hash of this code, not the code, and does not keep your
@@ -387,7 +387,7 @@ fn enough_message(e: &Enrollment) -> String {
 
 Someone asked for a PeerSig enrollment code for this address, which
 already received {n}, the most one address can get. Use one of the codes
-you received (one per computer).
+you received (one per computer or phone).
 
 If you did not ask for a code, ignore this message.
 {contact}

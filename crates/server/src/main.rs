@@ -94,7 +94,7 @@ struct WebArgs {
     /// The study team's e-mail address, shown on the page and in messages.
     #[arg(long, env = "PEERSIG_CONTACT")]
     contact: Option<String>,
-    /// Codes one e-mail address or GitHub account can get (one per computer).
+    /// Codes one e-mail address or GitHub account can get (one per computer or phone).
     #[arg(long, env = "PEERSIG_CODES_PER_IDENTITY", default_value_t = 3)]
     codes_per_identity: u32,
     /// Codes the page hands out per hour, all methods together.

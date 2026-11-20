@@ -123,7 +123,9 @@
     var detect = function () {
       var ua = navigator.userAgent;
       var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
-      if (/android|iphone|ipad|ipod/i.test(ua) || (/mac/i.test(plat) && navigator.maxTouchPoints > 1)) return Promise.resolve("mobile");
+      // Before Linux: Android's user agent names Linux too.
+      if (/android/i.test(ua) || /android/i.test(plat)) return Promise.resolve("android");
+      if (/iphone|ipad|ipod/i.test(ua) || (/mac/i.test(plat) && navigator.maxTouchPoints > 1)) return Promise.resolve("mobile");
       if (/mac/i.test(plat) || /Mac OS X/.test(ua)) {
         if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
           return navigator.userAgentData.getHighEntropyValues(["architecture"])
@@ -149,7 +151,7 @@
     };
     var mb = function (n) { return (n / 1048576).toFixed(1) + " MB"; };
     var tabFor = function (kind) {
-      var name = /^macos/.test(kind) ? "macos" : /^windows/.test(kind) ? "windows" : /^linux/.test(kind) ? "linux" : "macos";
+      var name = /^macos/.test(kind) ? "macos" : /^windows/.test(kind) ? "windows" : /^linux/.test(kind) ? "linux" : kind === "android" ? "android" : "macos";
       return document.getElementById("tab-" + name);
     };
     var latest = fetch("/download/latest.json", { cache: "no-cache" })
@@ -191,7 +193,7 @@
       }
       var note = document.getElementById("dl-note");
       if (kind === "mobile" || kind === "other") {
-        note.textContent = kind === "mobile" ? "PeerSig runs on a computer: open this page on a Mac or a PC." : "Pick your system:";
+        note.textContent = kind === "mobile" ? "PeerSig does not run on iPhones and iPads: open this page on a computer or an Android phone." : "Pick your system:";
         note.hidden = false;
       }
       if (!dlTabs.asked) dlTabs.select(tabFor(kind), false);

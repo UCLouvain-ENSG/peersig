@@ -1,7 +1,7 @@
 <section class="hero">
   <div class="eyebrow">Participate</div>
   <h1>Join in <span class="grad">three steps</span></h1>
-  <p class="lead">About three minutes. Nothing leaves your computer before you have seen it, and you can leave at any time from the app.</p>
+  <p class="lead">About three minutes. Nothing leaves your computer or phone before you have seen it, and you can leave at any time from the app.</p>
   {{NOTICE}}
 </section>
 
@@ -13,6 +13,7 @@
       <button type="button" role="tab" id="tab-macos" aria-controls="pane-macos">macOS</button>
       <button type="button" role="tab" id="tab-windows" aria-controls="pane-windows">Windows</button>
       <button type="button" role="tab" id="tab-linux" aria-controls="pane-linux">Linux</button>
+      <button type="button" role="tab" id="tab-android" aria-controls="pane-android">Android</button>
       <button type="button" role="tab" id="tab-server" aria-controls="pane-server">Linux server</button>
     </div>
     <p class="dl-note" id="dl-note" hidden></p>
@@ -59,6 +60,21 @@
       <div class="tip"><b>Install</b> with <code>sudo apt install ./PeerSig_*_amd64.deb</code> or <code>sudo dnf install ./PeerSig-*.x86_64.rpm</code> (<code>zypper</code> on openSUSE): the package gives the capture probe the rights it needs. The AppImage runs the app, but cannot give the probe those rights. A server without a desktop: see <b>Linux server</b>.</div>
     </section>
 
+    <section class="pane" id="pane-android" role="tabpanel" aria-labelledby="tab-android">
+      <h3>Android</h3>
+      <div class="dl">
+        <div class="row">
+          <a class="btn big grad-bg" data-kind="android" href="/download/PeerSig-android.apk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>Download for Android</a>
+        </div>
+        <span class="meta">Android 10 or newer · .apk, not on Google Play</span>
+      </div>
+      <div class="tip warn" role="note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+        <div><b>The first time:</b> open the downloaded file. Android asks whether your browser may install apps: allow it, then choose <b>Install</b>. If Google Play Protect warns about an unknown app, choose <b>More details</b>, then <b>Install anyway</b>. Once you have joined (step 3), choose <b>Allow and start</b>: Android asks once whether PeerSig may set up a VPN.</div>
+      </div>
+      <div class="tip"><b>A VPN that goes nowhere.</b> On Android, only a VPN app can see which app opens each connection. PeerSig's VPN stays on the phone: it forwards everything unchanged through your usual network, and records only how encrypted connections start, as on a computer. Android runs one VPN at a time: while PeerSig captures, another VPN (the university's, for instance) cannot run. <a href="https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/android.md">More on Android</a>.</div>
+    </section>
+
     <section class="pane" id="pane-server" role="tabpanel" aria-labelledby="tab-server">
       <h3>Linux server</h3>
       <p>No desktop needed: the probe and the <code>peersig</code> command, as two system services. The same anonymous weekly ballots as the app; each week's list is reviewed on the command line.</p>
@@ -80,14 +96,14 @@ sudo peersig status</code></pre>
 
   <li id="code">
     <h2>Get your code</h2>
-    <div class="why"><b>Why a code?</b> The collection only accepts ballots from enrolled participants, so that nobody can reach it uncontrolled from the internet and flood it with made-up results (spam). A code lets one computer send at most {{TOKENS}} anonymous ballots a week. It does not identify your ballots: they carry tokens signed blind, which cannot be traced back to the code.</div>
+    <div class="why"><b>Why a code?</b> The collection only accepts ballots from enrolled participants, so that nobody can reach it uncontrolled from the internet and flood it with made-up results (spam). A code lets one computer or phone send at most {{TOKENS}} anonymous ballots a week. It does not identify your ballots: they carry tokens signed blind, which cannot be traced back to the code.</div>
     <div class="methods">{{METHODS}}</div>
   </li>
 
   <li id="join">
     <h2>Open PeerSig and paste it</h2>
     <p>The addresses are filled in already: the server <code>{{SERVER}}</code>{{RELAY}}. Paste your code, choose whether to share the server names your non-browser applications connect to, and join.</p>
-    <div class="tip">Then, every Monday, PeerSig shows you last week's list and waits a day: untick anything you do not want to send. It then sends each item as a separate anonymous ballot. The icon in the menu bar (on Windows, the notification area) tells you when.</div>
+    <div class="tip">Then, every Monday, PeerSig shows you last week's list and waits a day: untick anything you do not want to send. It then sends each item as a separate anonymous ballot. The icon in the menu bar (on Windows, the notification area; on Android, PeerSig's notification) tells you when.</div>
   </li>
 </ol>
 <div class="aside" id="observers">

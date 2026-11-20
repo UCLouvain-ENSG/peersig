@@ -33,6 +33,8 @@ KINDS = {
     # Without a desktop, for servers (docs/headless.md).
     "headless-deb": ("peersig-headless_", "_amd64.deb", "peersig-headless-amd64.deb"),
     "headless-rpm": ("peersig-headless-", ".x86_64.rpm", "peersig-headless-x86_64.rpm"),
+    # Android 10 or newer, both ABIs in one .apk (docs/android.md).
+    "android": ("PeerSig_", "_android.apk", "PeerSig-android.apk"),
 }
 
 
