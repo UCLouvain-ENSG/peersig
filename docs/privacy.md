@@ -130,9 +130,10 @@ server checks the signature and that the nonce is unspent, but cannot tell
 which issuance it came from. This is the standard anonymous-voting
 construction: eligibility is checked, identity is not learned.
 
-- Every participant asks for the **same number of tokens** each week (512 by
-  default), whatever they will send, so issuance does not reveal how much a
-  participant has.
+- Every participant asks for the **same number of tokens** each week (4096
+  by default), whatever they will send, so issuance does not reveal how much
+  a participant has. With more items than tokens, every handshake item goes
+  first and a random sample of server names fills the rest.
 - Each week has its own signing key. The app fetches it anonymously
   (through the relay) before asking for signatures, and checks every
   signature against it. A server signing one participant's tokens with a

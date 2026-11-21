@@ -25,8 +25,9 @@ struct Cli {
 
 #[derive(Args)]
 struct Params {
-    /// Tokens per participant and epoch, the same for everyone.
-    #[arg(long, global = true, env = "PEERSIG_TOKENS", default_value_t = 512)]
+    /// Tokens per participant and epoch, the same for everyone. A computer
+    /// that shares server names sees about 2000 items a week.
+    #[arg(long, global = true, env = "PEERSIG_TOKENS", default_value_t = 4096)]
     tokens_per_epoch: u32,
     /// Participants needed to release a hello item.
     #[arg(long, global = true, env = "PEERSIG_K_HELLO", default_value_t = 3)]

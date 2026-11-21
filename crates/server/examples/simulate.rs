@@ -41,7 +41,7 @@ struct Args {
     /// Fraction of participants who share server names.
     #[arg(long, default_value_t = 0.5)]
     share: f64,
-    #[arg(long, default_value_t = 512)]
+    #[arg(long, default_value_t = 4096)]
     tokens: u32,
     #[arg(long, default_value_t = 3)]
     k_hello: u32,

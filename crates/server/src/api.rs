@@ -111,7 +111,16 @@ pub fn issue(s: &State, body: &[u8]) -> Reply {
             return internal(e);
         }
     }
-    let signatures: Result<Vec<Vec<u8>>, _> = req.blinded.iter().map(|b| issuer.sign(b)).collect();
+    // Signing is the slow part (1 to 3 ms a token on a server's core):
+    // spread over the cores, a whole budget is signed well within the
+    // client's timeout.
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(8);
+    let chunk = req.blinded.len().div_ceil(threads).max(1);
+    let signatures: Result<Vec<Vec<u8>>, _> = std::thread::scope(|sc| {
+        let issuer = &issuer;
+        let parts: Vec<_> = req.blinded.chunks(chunk).map(|c| sc.spawn(move || c.iter().map(|b| issuer.sign(b)).collect::<Result<Vec<_>, _>>())).collect();
+        parts.into_iter().map(|h| h.join().expect("signing thread")).collect::<Result<Vec<Vec<_>>, _>>().map(|v| v.concat())
+    });
     match signatures {
         Ok(signatures) => json(200, &IssueResponse { key_id: key_id(issuer.public_der()), signatures }),
         Err(e) => internal(e),
@@ -279,11 +288,13 @@ async fn ohttp_h(AxState(s): AxState<Arc<State>>, body: Bytes) -> Response {
 }
 
 pub fn router(state: Arc<State>) -> Router {
+    // A participant's whole budget in one request: each blinded token is
+    // 344 characters of base64 (4096 tokens: about 1.4 MB).
+    let issue_limit = 64 * 1024 + state.settings.tokens_per_epoch as usize * 512;
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route(PATH_CONFIG, get(|AxState(s): AxState<Arc<State>>| blocking(move || config(&s))))
         .route(PATH_RELEASED, get(|AxState(s): AxState<Arc<State>>| blocking(move || released(&s))))
-        .route(PATH_ISSUE, post(|AxState(s): AxState<Arc<State>>, body: Bytes| blocking(move || issue(&s, &body))))
         .route(
             PATH_OHTTP_KEYS,
             get(|AxState(s): AxState<Arc<State>>| async move {
@@ -297,8 +308,11 @@ pub fn router(state: Arc<State>) -> Router {
             &format!("{}/{{day}}", PATH_OBSERVED),
             get(|AxState(s): AxState<Arc<State>>, Path(day): Path<String>| blocking(move || observed_day(&s, &day))),
         )
-        // Issuance of 512 tokens is about 180 kB of JSON.
         .layer(DefaultBodyLimit::max(512 * 1024))
+        .route(
+            PATH_ISSUE,
+            post(|AxState(s): AxState<Arc<State>>, body: Bytes| blocking(move || issue(&s, &body))).layer(DefaultBodyLimit::max(issue_limit)),
+        )
         // A day of a busy observer: up to OBSERVER_MAX_ITEMS items.
         .route(
             PATH_OBSERVE,

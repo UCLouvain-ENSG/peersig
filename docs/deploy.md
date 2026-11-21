@@ -50,7 +50,7 @@ Parameters (flags or environment variables):
 | --- | --- | --- | --- |
 | `--epoch-origin` | `PEERSIG_EPOCH_ORIGIN` | Monday of the first run | Fixed when the database is created |
 | `--epoch-days` | `PEERSIG_EPOCH_DAYS` | 7 | Fixed when the database is created |
-| `--tokens-per-epoch` | `PEERSIG_TOKENS` | 512 | Ballots a participant can send per week |
+| `--tokens-per-epoch` | `PEERSIG_TOKENS` | 4096 | Ballots a participant can send per week: one per item, handshakes first, then server names |
 | `--k-hello` | `PEERSIG_K_HELLO` | 3 | Participants needed to release a fingerprint |
 | `--k-domain` | `PEERSIG_K_DOMAIN` | 5 | Participants needed to release a domain |
 | `--about-url` | `PEERSIG_ABOUT_URL` | none | Study page, linked from the app |
