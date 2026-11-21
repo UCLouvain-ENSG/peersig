@@ -117,9 +117,26 @@ async fn set_paused(app: AppHandle, core: State<'_, Shared>, paused: bool) -> R<
 }
 
 #[tauri::command]
-async fn install_probe(core: State<'_, Shared>, wake: State<'_, Wake>) -> R<()> {
+async fn install_probe(app: AppHandle, core: State<'_, Shared>, wake: State<'_, Wake>) -> R<()> {
     let logs = core.lock().await.p.settings.logs();
-    tauri::async_runtime::spawn_blocking(move || probe::install(&logs)).await.map_err(e2s)?.map_err(e2s)?;
+    let dir = logs.clone();
+    tauri::async_runtime::spawn_blocking(move || probe::install(&dir)).await.map_err(e2s)?.map_err(e2s)?;
+    // The window shows the service as its status file describes it, and
+    // the new service writes that file only once it runs: wait for it (a
+    // few seconds), or the window keeps showing the old one, and its
+    // "Update capture service" button, until a later refresh.
+    if cfg!(any(target_os = "macos", windows)) {
+        for _ in 0..40 {
+            let tool = peersig_client::local::status(&logs).tool;
+            if tool.as_deref().is_some_and(probe::shipped) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+    let view = commands::state(&core).await;
+    update_tray(&app, &view);
+    let _ = app.emit("state", view);
     wake.0.notify_one();
     Ok(())
 }

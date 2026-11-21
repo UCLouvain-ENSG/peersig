@@ -85,12 +85,12 @@ pub fn installed() -> bool {
 /// does not replace it, so the service keeps the old probe and its bugs
 /// until it is installed again. Linux runs the app's own probe.
 pub fn service_outdated(tool: Option<&str>) -> bool {
-    (cfg!(windows) || cfg!(target_os = "macos")) && installed() && tool.is_some_and(not_shipped)
+    (cfg!(windows) || cfg!(target_os = "macos")) && installed() && tool.is_some_and(|t| !shipped(t))
 }
 
-/// Whether a probe's `tool` is not the probe this app ships.
-fn not_shipped(tool: &str) -> bool {
-    tool != concat!("peersig-probe ", env!("CARGO_PKG_VERSION"))
+/// Whether a probe's `tool` is the probe this app ships.
+pub fn shipped(tool: &str) -> bool {
+    tool == concat!("peersig-probe ", env!("CARGO_PKG_VERSION"))
 }
 
 fn env_dir(var: &str, default: &str) -> PathBuf {
@@ -424,8 +424,8 @@ mod tests {
     #[test]
     fn shipped_probe() {
         // The probe names itself with the workspace's version, as the app does.
-        assert!(!not_shipped(&format!("peersig-probe {}", env!("CARGO_PKG_VERSION"))));
-        assert!(not_shipped("peersig-probe 0.1.7"));
+        assert!(shipped(&format!("peersig-probe {}", env!("CARGO_PKG_VERSION"))));
+        assert!(!shipped("peersig-probe 0.1.7"));
     }
 
     #[test]
