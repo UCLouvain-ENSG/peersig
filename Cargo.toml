@@ -7,7 +7,7 @@ members = ["crates/probe", "crates/proto", "crates/server", "crates/relay", "cra
 default-members = ["crates/probe", "crates/proto", "crates/server", "crates/relay", "crates/headless", "crates/client"]
 
 [workspace.package]
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/UCLouvain-ENSG/peersig"
