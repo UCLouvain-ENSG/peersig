@@ -190,18 +190,93 @@ pub fn mapped_files(pid: i32) -> Vec<String> {
     out
 }
 
-/// Without PKTAP metadata: who has this local port open. `lsof` is slow
-/// (100 ms or more) but only runs for flows PKTAP did not attribute.
+/// Without PKTAP metadata: the process that has this flow's socket open.
+/// `lsof` is slow (100 ms or more) but only runs for flows PKTAP did not
+/// attribute.
+///
+/// `lsof -i TCP:<port>` lists every socket with that port number at either
+/// end and on any address, so each one is checked against the whole flow.
+/// Taking the first process listed credited Defender's connections to
+/// Thunderbird, whose loopback connection to a local service had that port
+/// as its remote port, and to XQuartz, which had the port on `::1`; and a
+/// Firefox connection to a git process that kept a socket with the same
+/// port on the address of a network the Mac had left.
 pub fn socket_owner(key: &FlowKey) -> Option<i32> {
     let proto = if key.proto == crate::net::TCP { "TCP" } else { "UDP" };
     let spec = format!("{}:{}", proto, key.sport);
     let out = std::process::Command::new("/usr/sbin/lsof")
-        .args(["-nP", "-w", "-F", "p", "-i", &spec])
+        .args(["-nP", "-w", "-F", "pn", "-i", &spec])
         .output()
         .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.strip_prefix('p').and_then(|p| p.parse().ok()))
+    owner_in_lsof(&String::from_utf8_lossy(&out.stdout), key)
+}
+
+/// The process of the socket that best matches the flow in `lsof -F pn`
+/// output (`p<pid>`, then an `n<name>` line per socket): both endpoints, or
+/// for UDP an unconnected socket on the source port. The local address may
+/// be the wildcard. A socket that matches only the port number is never
+/// taken.
+fn owner_in_lsof(out: &str, key: &FlowKey) -> Option<i32> {
+    let mut pid = None;
+    let mut best: Option<(u8, i32)> = None;
+    for l in out.lines() {
+        if let Some(p) = l.strip_prefix('p') {
+            pid = p.parse::<i32>().ok();
+            continue;
+        }
+        let (Some(name), Some(p)) = (l.strip_prefix('n'), pid) else { continue };
+        let Some(score) = flow_match(name, key) else { continue };
+        if best.map_or(true, |(b, _)| score > b) {
+            best = Some((score, p));
+        }
+        if score == 4 {
+            break;
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// How well an `lsof` socket name (`10.0.0.2:52000->192.0.2.1:443`,
+/// `[::1]:6000`, `*:5353`) matches the flow: 2 per endpoint that matches
+/// exactly, 1 for a wildcard local address or an unconnected UDP socket;
+/// None when an endpoint differs.
+fn flow_match(name: &str, key: &FlowKey) -> Option<u8> {
+    let (local, remote) = match name.split_once("->") {
+        Some((l, r)) => (l, Some(r)),
+        None => (name, None),
+    };
+    let (la, lp) = lsof_endpoint(local)?;
+    if lp != key.sport {
+        return None;
+    }
+    let local = match la {
+        Some(a) if a == super::canonical(key.src) => 2,
+        None => 1,
+        Some(a) if a.is_unspecified() => 1,
+        Some(_) => return None,
+    };
+    let remote = match remote {
+        Some(r) => match lsof_endpoint(r)? {
+            (Some(ra), rp) if ra == super::canonical(key.dst) && rp == key.dport => 2,
+            _ => return None,
+        },
+        None if key.proto != crate::net::TCP => 1,
+        None => return None,
+    };
+    Some(local + remote)
+}
+
+/// `192.0.2.1:443`, `[2001:db8::1]:443`, `[fe80::1%en0]:5353` or `*:5353`
+/// (None for the wildcard address).
+fn lsof_endpoint(s: &str) -> Option<(Option<std::net::IpAddr>, u16)> {
+    let (host, port) = s.rsplit_once(':')?;
+    let port = port.parse().ok()?;
+    if host == "*" {
+        return Some((None, port));
+    }
+    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    let host = host.split('%').next().unwrap_or(host);
+    Some((Some(super::canonical(host.parse().ok()?)), port))
 }
 
 fn sysctl_string(name: &str) -> Option<String> {
@@ -237,3 +312,65 @@ pub fn os_info() -> OsInfo {
 }
 
 pub const DEFAULT_DEVICE: &str = "pktap,all";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::{TCP, UDP};
+
+    fn key(proto: u8, src: &str, dst: &str) -> FlowKey {
+        let (s, d): (std::net::SocketAddr, std::net::SocketAddr) = (src.parse().unwrap(), dst.parse().unwrap());
+        FlowKey { proto, src: s.ip(), sport: s.port(), dst: d.ip(), dport: d.port() }
+    }
+
+    /// The three misattributions of 0.1.1 (lsof lines as it prints them):
+    /// the same port number elsewhere is not the flow's socket.
+    #[test]
+    fn same_port_elsewhere() {
+        // Defender from 192.168.0.102:49155; Thunderbird is connected to a
+        // local service listening on 127.0.0.1:49155.
+        let k = key(TCP, "192.168.0.102:49155", "4.207.44.64:443");
+        let lsof = "p1060\nf22\nn127.0.0.1:49406->127.0.0.1:49155\np2214\nf3\nn127.0.0.1:49155->127.0.0.1:49406\nf7\nn127.0.0.1:49155\n";
+        assert_eq!(owner_in_lsof(lsof, &k), None);
+        let with_owner = format!("{}p700\nf12\nn192.168.0.102:49155->4.207.44.64:443\n", lsof);
+        assert_eq!(owner_in_lsof(&with_owner, &k), Some(700));
+        // XQuartz's own loopback connection on [::1].
+        let k = key(TCP, "130.104.228.108:49156", "72.145.163.206:443");
+        assert_eq!(owner_in_lsof("p804\nf16\nn[::1]:49156->[::1]:6000\n", &k), None);
+        // git kept a socket on the address of the previous network.
+        let k = key(TCP, "130.104.45.87:63006", "213.244.171.241:443");
+        assert_eq!(owner_in_lsof("p82752\nf5\nn130.104.228.108:63006->140.82.121.4:443\n", &k), None);
+    }
+
+    #[test]
+    fn udp_and_ipv6() {
+        let k = key(UDP, "[2001:db8::5]:51234", "[2001:db8::1]:443");
+        // An unconnected socket on the wildcard address, then the
+        // connected one: the connected one wins.
+        let lsof = "p10\nf4\nn*:51234\np11\nf9\nn[2001:db8::5]:51234->[2001:db8::1]:443\n";
+        assert_eq!(owner_in_lsof(lsof, &k), Some(11));
+        assert_eq!(owner_in_lsof("p10\nf4\nn*:51234\n", &k), Some(10));
+        assert_eq!(owner_in_lsof("p10\nf4\nn[2001:db8::5]:51234->[2001:db8::2]:443\n", &k), None);
+        // A TCP socket without a peer (listening) is not a connection.
+        let k = key(TCP, "192.0.2.5:6000", "192.0.2.1:443");
+        assert_eq!(owner_in_lsof("p10\nf4\nn*:6000\n", &k), None);
+        // An IPv4 flow on a dual-stack socket; a scoped address.
+        let k = key(TCP, "192.0.2.5:52000", "198.51.100.1:443");
+        assert_eq!(owner_in_lsof("p12\nf4\nn[::ffff:192.0.2.5]:52000->[::ffff:198.51.100.1]:443\n", &k), Some(12));
+        assert_eq!(lsof_endpoint("[fe80::1%en0]:5353"), Some((Some("fe80::1".parse().unwrap()), 5353)));
+    }
+
+    /// The real lsof on this process's own connection (no root needed).
+    #[test]
+    fn own_connection() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let c = std::net::TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (_a, _) = l.accept().unwrap();
+        let (src, dst) = (c.local_addr().unwrap(), c.peer_addr().unwrap());
+        let k = FlowKey { proto: TCP, src: src.ip(), sport: src.port(), dst: dst.ip(), dport: dst.port() };
+        assert_eq!(socket_owner(&k), Some(std::process::id() as i32));
+        // The same local port towards another peer: nobody.
+        let other = FlowKey { dport: dst.port().wrapping_add(1), ..k };
+        assert_eq!(socket_owner(&other), None);
+    }
+}
