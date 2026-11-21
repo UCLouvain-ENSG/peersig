@@ -145,8 +145,14 @@ class CaptureService : VpnService() {
         super.onDestroy()
     }
 
+    /**
+     * Whether the network reaches the IPv6 Internet: a default route and a
+     * global address (2000::/3). A site-local or unique local address
+     * alone (the emulator's fec0::) does not.
+     */
     private fun hasIpv6(lp: LinkProperties?): Boolean =
-        lp?.routes?.any { it.isDefaultRoute && it.destination.address is Inet6Address } == true
+        lp?.routes?.any { it.isDefaultRoute && it.destination.address is Inet6Address } == true &&
+            lp.linkAddresses.any { val a = it.address; a is Inet6Address && (a.address[0].toInt() and 0xe0) == 0x20 }
 
     private fun setDns(lp: LinkProperties?) {
         Native.setDns(lp?.dnsServers?.joinToString(",") { it.hostAddress ?: "" } ?: "")

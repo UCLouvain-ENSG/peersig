@@ -9,26 +9,32 @@
 //! own VPN (`addDisallowedApplication`), so those connections, like its
 //! ballots, use the network directly.
 //!
+//! An app's connection opens only once its destination's has: ipstack
+//! answers a SYN at once, so the [`Gate`] holds each SYN until the
+//! connection to the destination is open, and answers a reset when it
+//! cannot be.
+//!
 //! The VPN names a DNS server of its own ([`Dns::VIRTUAL_V4`]); queries to
 //! it go to the network's own DNS servers, which the app updates when the
 //! network changes. Nothing else is redirected, and no other resolver is
 //! used: with no known server, queries go unanswered.
 
+use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender, TrySendError};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ipstack::{IpStack, IpStackConfig, IpStackStream, IpStackTcpStream, IpStackUdpStream, TcpConfig};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use crate::capture::{self, Counters, Packet};
 
@@ -42,6 +48,10 @@ const UDP_IDLE: Duration = Duration::from_secs(120);
 /// least 2 h 4 min): push channels stay idle for many minutes.
 const TCP_IDLE: Duration = Duration::from_secs(7440);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+/// After its SYN went to ipstack, a flow's retransmitted SYNs go there too.
+const GIVEN_TTL: Duration = Duration::from_secs(10);
+/// An open connection ipstack never took is closed after this long.
+const OPEN_TTL: Duration = Duration::from_secs(60);
 
 /// The VPN's DNS server, and the network's servers it stands for.
 pub struct Dns {
@@ -85,12 +95,190 @@ impl Default for Dns {
     }
 }
 
+/// An app's connection, between its SYN and ipstack taking it.
+enum Flow {
+    /// The SYN is held while the connection to the destination opens.
+    Connecting,
+    /// Open: the SYN went to ipstack, which will take this connection.
+    Open(TcpStream, Instant),
+    /// ipstack has the flow.
+    Given(Instant),
+}
+
+/// Holds each app's SYN until the connection to its destination is open.
+///
+/// ipstack answers a SYN at once, so to an app every connection seemed to
+/// open, even one that could not: Happy Eyeballs then kept a dead IPv6
+/// path instead of falling back to IPv4, and the app sent its ClientHello
+/// into a connection that ended only when the forwarder gave up
+/// (`CONNECT_TIMEOUT`). Now the app's SYN reaches ipstack, and is answered,
+/// only once the destination has answered; when it does not, the app gets
+/// a reset, as from the destination itself.
+struct Gate {
+    flows: Mutex<HashMap<(SocketAddr, SocketAddr), Flow>>,
+    /// SYNs to hand to ipstack, their connection open.
+    ready: mpsc::UnboundedSender<Vec<u8>>,
+    /// The interface, to write resets to; weak, so that stopping the
+    /// forwarder closes it whatever connections remain.
+    fd: Weak<AsyncFd<OwnedFd>>,
+    dns: Arc<Dns>,
+    counters: Arc<Counters>,
+}
+
+impl Gate {
+    /// Whether to hold this packet (an app's SYN) instead of handing it to
+    /// ipstack now.
+    fn hold(self: &Arc<Self>, pkt: &[u8]) -> bool {
+        let Some((src, dst)) = syn_of(pkt) else { return false };
+        let mut flows = self.flows.lock().unwrap();
+        match flows.get(&(src, dst)) {
+            // A retransmission: the first SYN is held, or queued for ipstack.
+            Some(Flow::Connecting | Flow::Open(..)) => return true,
+            Some(Flow::Given(t)) if t.elapsed() < GIVEN_TTL => return false,
+            _ => {}
+        }
+        if flows.len() > 256 {
+            flows.retain(|_, f| match f {
+                Flow::Connecting => true,
+                Flow::Open(_, t) => t.elapsed() < OPEN_TTL,
+                Flow::Given(t) => t.elapsed() < GIVEN_TTL,
+            });
+        }
+        flows.insert((src, dst), Flow::Connecting);
+        drop(flows);
+        let (gate, syn) = (self.clone(), pkt.to_vec());
+        tokio::spawn(async move { gate.open(src, dst, syn).await });
+        true
+    }
+
+    async fn open(self: Arc<Self>, src: SocketAddr, dst: SocketAddr, syn: Vec<u8>) {
+        let up = match self.dns.upstream(dst) {
+            Some(to) => tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(to)).await.ok().and_then(Result::ok),
+            None => None,
+        };
+        match up {
+            Some(s) => {
+                self.flows.lock().unwrap().insert((src, dst), Flow::Open(s, Instant::now()));
+                let _ = self.ready.send(syn);
+            }
+            None => {
+                self.flows.lock().unwrap().remove(&(src, dst));
+                self.counters.failed.fetch_add(1, Ordering::Relaxed);
+                if let (Some(rst), Some(fd)) = (reset_for(&syn), self.fd.upgrade()) {
+                    // Non-blocking: a reset that does not fit now is left out,
+                    // and the app's own timeout ends the connection.
+                    unsafe { libc::write(fd.get_ref().as_raw_fd(), rst.as_ptr() as *const libc::c_void, rst.len()) };
+                }
+            }
+        }
+    }
+
+    /// The open connection for the flow ipstack now has, if the gate made
+    /// one.
+    fn take(&self, src: SocketAddr, dst: SocketAddr) -> Option<TcpStream> {
+        let mut flows = self.flows.lock().unwrap();
+        let s = match flows.remove(&(src, dst)) {
+            Some(Flow::Open(s, _)) => Some(s),
+            Some(Flow::Connecting) => {
+                flows.insert((src, dst), Flow::Connecting);
+                return None;
+            }
+            _ => None,
+        };
+        flows.insert((src, dst), Flow::Given(Instant::now()));
+        s
+    }
+}
+
+/// The app's address and the destination of a TCP SYN (without ACK), from
+/// an IPv4 packet or an IPv6 one without extension headers.
+fn syn_of(pkt: &[u8]) -> Option<(SocketAddr, SocketAddr)> {
+    let (src, dst, tcp): (IpAddr, IpAddr, &[u8]) = match pkt.first()? >> 4 {
+        4 => {
+            let ihl = ((pkt[0] & 0x0f) as usize) * 4;
+            let frag = u16::from_be_bytes([*pkt.get(6)?, *pkt.get(7)?]) & 0x3fff != 0;
+            if *pkt.get(9)? != 6 || frag || ihl < 20 {
+                return None;
+            }
+            let a = |i: usize| -> Option<IpAddr> { Some(Ipv4Addr::from(<[u8; 4]>::try_from(pkt.get(i..i + 4)?).ok()?).into()) };
+            (a(12)?, a(16)?, pkt.get(ihl..)?)
+        }
+        6 => {
+            if *pkt.get(6)? != 6 {
+                return None;
+            }
+            let a = |i: usize| -> Option<IpAddr> { Some(Ipv6Addr::from(<[u8; 16]>::try_from(pkt.get(i..i + 16)?).ok()?).into()) };
+            (a(8)?, a(24)?, pkt.get(40..)?)
+        }
+        _ => return None,
+    };
+    if tcp.len() < 20 || tcp[13] & 0x12 != 0x02 {
+        return None;
+    }
+    let port = |i: usize| u16::from_be_bytes([tcp[i], tcp[i + 1]]);
+    Some((SocketAddr::new(src, port(0)), SocketAddr::new(dst, port(2))))
+}
+
+/// The RST|ACK a destination answers a refused SYN with.
+fn reset_for(syn: &[u8]) -> Option<Vec<u8>> {
+    syn_of(syn)?;
+    let v4 = syn[0] >> 4 == 4;
+    let ihl = if v4 { ((syn[0] & 0x0f) as usize) * 4 } else { 40 };
+    let t = &syn[ihl..];
+    let seq = u32::from_be_bytes([t[4], t[5], t[6], t[7]]);
+    let mut tcp = [0u8; 20];
+    tcp[0..2].copy_from_slice(&t[2..4]);
+    tcp[2..4].copy_from_slice(&t[0..2]);
+    tcp[8..12].copy_from_slice(&seq.wrapping_add(1).to_be_bytes());
+    tcp[12] = 5 << 4;
+    tcp[13] = 0x14; // RST, ACK
+    let mut out = Vec::with_capacity(60);
+    let mut pseudo = Vec::with_capacity(40);
+    if v4 {
+        let (src, dst) = (&syn[16..20], &syn[12..16]);
+        out.extend_from_slice(&[0x45, 0, 0, 40, 0, 0, 0x40, 0, 64, 6, 0, 0]);
+        out.extend_from_slice(src);
+        out.extend_from_slice(dst);
+        let c = checksum(&out);
+        out[10..12].copy_from_slice(&c.to_be_bytes());
+        pseudo.extend_from_slice(src);
+        pseudo.extend_from_slice(dst);
+        pseudo.extend_from_slice(&[0, 6, 0, 20]);
+    } else {
+        let (src, dst) = (&syn[24..40], &syn[8..24]);
+        out.extend_from_slice(&[0x60, 0, 0, 0, 0, 20, 6, 64]);
+        out.extend_from_slice(src);
+        out.extend_from_slice(dst);
+        pseudo.extend_from_slice(src);
+        pseudo.extend_from_slice(dst);
+        pseudo.extend_from_slice(&[0, 0, 0, 20, 0, 0, 0, 6]);
+    }
+    pseudo.extend_from_slice(&tcp);
+    let c = checksum(&pseudo);
+    tcp[16..18].copy_from_slice(&c.to_be_bytes());
+    out.extend_from_slice(&tcp);
+    Some(out)
+}
+
+/// The Internet checksum (RFC 1071).
+fn checksum(data: &[u8]) -> u16 {
+    let mut sum: u32 = data.chunks(2).map(|c| u16::from_be_bytes([c[0], *c.get(1).unwrap_or(&0)]) as u32).sum();
+    while sum > 0xffff {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
 /// The VPN's file descriptor as a packet device: one IP packet per read
-/// or write. Each packet read also goes to the capture.
+/// or write. Each packet read also goes to the capture; an app's SYN waits
+/// at the [`Gate`].
 struct Tun {
-    fd: AsyncFd<OwnedFd>,
+    fd: Arc<AsyncFd<OwnedFd>>,
     tee: SyncSender<Packet>,
     counters: Arc<Counters>,
+    gate: Arc<Gate>,
+    /// SYNs the gate let through.
+    ready: mpsc::UnboundedReceiver<Vec<u8>>,
     /// The interface is gone: reads wait forever, until the stack stops.
     closed: bool,
 }
@@ -110,6 +298,14 @@ impl AsyncRead for Tun {
         // gone, it waits here instead of spinning.
         if this.closed {
             return Poll::Pending;
+        }
+        // A held SYN whose connection is open (it went to the capture when
+        // it was read).
+        if let Poll::Ready(Some(syn)) = this.ready.poll_recv(cx) {
+            if syn.len() <= buf.remaining() {
+                buf.put_slice(&syn);
+                return Poll::Ready(Ok(()));
+            }
         }
         loop {
             let mut guard = match this.fd.poll_read_ready(cx) {
@@ -143,6 +339,9 @@ impl AsyncRead for Tun {
                         if let Err(TrySendError::Full(_)) = this.tee.try_send((ts, pkt.to_vec())) {
                             this.counters.dropped.fetch_add(1, Ordering::Relaxed);
                         }
+                    }
+                    if this.gate.hold(pkt) {
+                        continue;
                     }
                     buf.advance(n);
                     return Poll::Ready(Ok(()));
@@ -199,12 +398,14 @@ impl Forwarder {
         let owned = unsafe { OwnedFd::from_raw_fd(fd) };
         set_nonblocking(owned.as_raw_fd())?;
         let (stop, mut stopped) = watch::channel(false);
-        let tun = {
+        let (ready_tx, ready) = mpsc::unbounded_channel();
+        let (tun, gate) = {
             let _enter = rt.enter();
             // Safety: `owned` is the open interface, and the AsyncFd owns it
             // until it is dropped.
-            let fd = unsafe { AsyncFd::register(owned) }.map_err(io::Error::from)?;
-            Tun { fd, tee, counters: counters.clone(), closed: false }
+            let fd = Arc::new(unsafe { AsyncFd::register(owned) }.map_err(io::Error::from)?);
+            let gate = Arc::new(Gate { flows: Mutex::new(HashMap::new()), ready: ready_tx, fd: Arc::downgrade(&fd), dns: dns.clone(), counters: counters.clone() });
+            (Tun { fd, tee, counters: counters.clone(), gate: gate.clone(), ready, closed: false }, gate)
         };
         let generation = counters.generation.fetch_add(1, Ordering::SeqCst) + 1;
         counters.running.store(true, Ordering::SeqCst);
@@ -222,7 +423,7 @@ impl Forwarder {
                     s = stack.accept() => match s {
                         Ok(IpStackStream::Tcp(t)) => {
                             counters.tcp.fetch_add(1, Ordering::Relaxed);
-                            tokio::spawn(tcp(t, dns.clone(), counters.clone()));
+                            tokio::spawn(tcp(t, gate.clone(), dns.clone(), counters.clone()));
                         }
                         Ok(IpStackStream::Udp(u)) => {
                             counters.udp.fetch_add(1, Ordering::Relaxed);
@@ -257,14 +458,21 @@ impl Drop for Forwarder {
     }
 }
 
-async fn tcp(mut down: IpStackTcpStream, dns: Arc<Dns>, counters: Arc<Counters>) {
-    let Some(dst) = dns.upstream(down.peer_addr()) else { return };
-    let mut up = match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(dst)).await {
-        Ok(Ok(s)) => s,
-        // Dropping `down` resets the app's connection.
-        _ => {
-            counters.failed.fetch_add(1, Ordering::Relaxed);
-            return;
+async fn tcp(mut down: IpStackTcpStream, gate: Arc<Gate>, dns: Arc<Dns>, counters: Arc<Counters>) {
+    let mut up = match gate.take(down.local_addr(), down.peer_addr()) {
+        Some(s) => s,
+        // A SYN the gate let through (an IPv6 packet with extension
+        // headers, or a port reused at once): connect now.
+        None => {
+            let Some(dst) = dns.upstream(down.peer_addr()) else { return };
+            match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(dst)).await {
+                Ok(Ok(s)) => s,
+                // Dropping `down` resets the app's connection.
+                _ => {
+                    counters.failed.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+            }
         }
     };
     let _ = up.set_nodelay(true);
@@ -316,5 +524,72 @@ mod tests {
         assert_eq!(d.upstream(v6), Some("[2001:db8::53]:853".parse().unwrap()));
         d.set(vec!["192.168.1.1".parse().unwrap()]);
         assert_eq!(d.upstream(v6), Some("192.168.1.1:853".parse().unwrap()));
+    }
+
+    /// An app's SYN: IPv4 (with an option, so the header is 24 bytes) or
+    /// IPv6, from port 40000 to 443, sequence 0x01020304.
+    fn syn(v6: bool, flags: u8) -> Vec<u8> {
+        let mut tcp = vec![0x9c, 0x40, 0x01, 0xbb, 1, 2, 3, 4, 0, 0, 0, 0, 0x50, flags, 0xff, 0xff, 0, 0, 0, 0];
+        let mut p = if v6 {
+            let mut h = vec![0x60, 0, 0, 0, 0, 20, 6, 64];
+            h.extend_from_slice(&"fd50:ee5:91c::1".parse::<Ipv6Addr>().unwrap().octets());
+            h.extend_from_slice(&"2001:db8::1".parse::<Ipv6Addr>().unwrap().octets());
+            h
+        } else {
+            vec![0x46, 0, 0, 44, 0, 0, 0x40, 0, 64, 6, 0, 0, 10, 88, 0, 1, 192, 0, 2, 1, 1, 1, 1, 1]
+        };
+        p.append(&mut tcp);
+        p
+    }
+
+    /// The checksum over the pseudo-header and the TCP segment.
+    fn tcp_sum_ok(pkt: &[u8]) -> bool {
+        let (mut ps, tcp) = if pkt[0] >> 4 == 4 {
+            let mut ps = pkt[12..20].to_vec();
+            ps.extend_from_slice(&[0, 6, 0, (pkt.len() - 20) as u8]);
+            (ps, &pkt[20..])
+        } else {
+            let mut ps = pkt[8..40].to_vec();
+            ps.extend_from_slice(&[0, 0, 0, (pkt.len() - 40) as u8, 0, 0, 0, 6]);
+            (ps, &pkt[40..])
+        };
+        ps.extend_from_slice(tcp);
+        checksum(&ps) == 0
+    }
+
+    #[test]
+    fn syn_and_its_reset() {
+        for v6 in [false, true] {
+            let s = syn(v6, 0x02);
+            let (src, dst) = syn_of(&s).unwrap();
+            assert_eq!((src.port(), dst.port()), (40000, 443));
+            assert_eq!(dst.ip(), if v6 { "2001:db8::1".parse::<IpAddr>().unwrap() } else { "192.0.2.1".parse().unwrap() });
+            // Not a new connection: SYN|ACK, ACK, or no SYN.
+            for f in [0x12, 0x10, 0x18] {
+                assert_eq!(syn_of(&syn(v6, f)), None);
+            }
+            let r = reset_for(&s).unwrap();
+            let (h, t) = if v6 { (40, &r[40..]) } else { (20, &r[20..]) };
+            assert_eq!(r.len(), h + 20);
+            if v6 {
+                assert_eq!(&r[8..24], &s[24..40], "from the destination");
+                assert_eq!(&r[24..40], &s[8..24], "to the app");
+            } else {
+                assert_eq!(checksum(&r[..20]), 0, "IPv4 header checksum");
+                assert_eq!((&r[12..16], &r[16..20]), (&s[16..20], &s[12..16]));
+            }
+            assert_eq!(&t[0..4], &[0x01, 0xbb, 0x9c, 0x40], "ports swapped");
+            assert_eq!(&t[8..12], &[1, 2, 3, 5], "acknowledges the SYN");
+            assert_eq!(t[13], 0x14, "RST|ACK");
+            assert!(tcp_sum_ok(&r));
+        }
+        // A fragment, UDP, or a truncated packet: not a SYN.
+        let mut frag = syn(false, 0x02);
+        frag[6] = 0x20;
+        assert_eq!(syn_of(&frag), None);
+        let mut udp = syn(false, 0x02);
+        udp[9] = 17;
+        assert_eq!(syn_of(&udp), None);
+        assert_eq!(syn_of(&syn(true, 0x02)[..50]), None);
     }
 }

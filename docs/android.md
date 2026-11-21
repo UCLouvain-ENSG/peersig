@@ -38,6 +38,13 @@ Android shows an app other apps' traffic only through a VPN
   going, and copies the bytes both ways, unchanged. PeerSig is left out of
   its own VPN (`addDisallowedApplication`), so these connections, like its
   ballots, use the phone's network directly. No VPN server is involved.
+- An app's TCP connection opens only once PeerSig's to the destination
+  has: its SYN waits until then, and when the destination cannot be
+  reached the app gets a reset, as from the destination itself. ipstack
+  alone answers every SYN at once, so before 0.1.13 every connection
+  seemed to open: apps racing IPv6 against IPv4 (Happy Eyeballs) kept a
+  dead IPv6 path instead of falling back, and sent their ClientHello into
+  a connection that ended 20 s later.
 - A copy of each packet the apps send (except bare TCP ACKs) goes to the
   probe's own pipeline (`crates/probe`, as a library), which finds the
   ClientHellos (TCP, QUIC, DTLS), computes their JA4 with the same code as
@@ -69,8 +76,9 @@ Android shows an app other apps' traffic only through a VPN
   network's own: queries are forwarded to the DNS servers of the Wi-Fi or
   mobile network, updated when it changes. No other resolver is used.
   Private DNS keeps working (its ClientHellos are credited to `dns`).
-- IPv6 goes through the VPN only on networks that have it; the VPN starts
-  again when that changes. Multicast and broadcast stay outside.
+- IPv6 goes through the VPN only on networks that have it (a default
+  route and a global address, not only a site-local or unique local one);
+  the VPN starts again when that changes. Multicast and broadcast stay outside.
 - ICMP (ping) is not forwarded.
 
 ## Privacy
