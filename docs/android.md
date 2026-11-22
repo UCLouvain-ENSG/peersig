@@ -33,9 +33,13 @@ Android shows an app other apps' traffic only through a VPN
 
 - Every packet the phone's apps send into it is read by the native side
   (`crates/android/src/forward.rs`). A userspace TCP/IP stack
-  ([ipstack](https://crates.io/crates/ipstack)) ends each TCP connection
+  ([ipstack](https://crates.io/crates/ipstack) 1.0.1, with fixes to its
+  TCP in `vendor/ipstack`, see its `PATCHES.md`) ends each TCP connection
   and UDP flow there, opens the same one from PeerSig to where it was
-  going, and copies the bytes both ways, unchanged. PeerSig is left out of
+  going, and copies the bytes both ways, unchanged. Before 0.1.16 an app's
+  last bytes before closing could be lost, a request sent after a
+  half-close went unanswered, and uploads were up to 6 times slower.
+  PeerSig is left out of
   its own VPN (`addDisallowedApplication`), so these connections, like its
   ballots, use the phone's network directly. No VPN server is involved.
 - An app's TCP connection opens only once PeerSig's to the destination

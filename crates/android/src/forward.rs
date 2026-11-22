@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use ipstack::{IpStack, IpStackConfig, IpStackStream, IpStackTcpStream, IpStackUdpStream, TcpConfig};
+use ipstack::{IpStack, IpStackConfig, IpStackStream, IpStackTcpStream, IpStackUdpStream, TcpConfig, TcpOptions};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpStream, UdpSocket};
@@ -42,6 +42,16 @@ use crate::capture::{self, Counters, Packet};
 /// fewer packets cross user space, and a UDP answer (DNS) is cut only
 /// beyond it.
 pub const MTU: u16 = 10_000;
+/// The MSS ipstack announces to the apps: the MTU less the IPv6 and TCP
+/// headers. Without it, an app sends 536-byte segments (RFC 9293's
+/// default), each copied out as a packet of its own.
+const MSS: u16 = MTU - 60;
+/// ipstack's receive window and the data it sends unacknowledged: the
+/// most TCP allows without window scaling, which ipstack lacks. The apps
+/// are a few microseconds away, so this is ample.
+const WINDOW: usize = 65_535;
+/// The copy buffers between an app's connection and its destination's.
+const COPY_BUFFER: usize = 64 * 1024;
 /// UDP flows end after this long without a datagram either way.
 const UDP_IDLE: Duration = Duration::from_secs(120);
 /// TCP connections, as long as a home router keeps them (RFC 5382: at
@@ -415,6 +425,9 @@ impl Forwarder {
             cfg.udp_timeout(UDP_IDLE);
             let mut tcp_cfg = TcpConfig::default();
             tcp_cfg.timeout = TCP_IDLE;
+            tcp_cfg.options = Some(vec![TcpOptions::MaximumSegmentSize(MSS)]);
+            tcp_cfg.read_buffer_size = WINDOW;
+            tcp_cfg.max_unacked_bytes = WINDOW as u32;
             cfg.with_tcp_config(tcp_cfg);
             let mut stack = IpStack::new(cfg, tun);
             loop {
@@ -476,7 +489,11 @@ async fn tcp(mut down: IpStackTcpStream, gate: Arc<Gate>, dns: Arc<Dns>, counter
         }
     };
     let _ = up.set_nodelay(true);
-    let _ = tokio::io::copy_bidirectional(&mut down, &mut up).await;
+    // An app's FIN shuts down the destination's side for writing, and the
+    // destination's the app's: either may still send after the other's
+    // (ipstack keeps a half-closed connection, vendor/ipstack/PATCHES.md).
+    // When either side fails, `down` is dropped, which resets the app's.
+    let _ = tokio::io::copy_bidirectional_with_sizes(&mut down, &mut up, COPY_BUFFER, COPY_BUFFER).await;
 }
 
 async fn udp(mut down: IpStackUdpStream, dns: Arc<Dns>, counters: Arc<Counters>) {

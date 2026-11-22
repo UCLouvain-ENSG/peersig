@@ -53,6 +53,9 @@ pub(crate) struct Tcb {
     state: TcpState,
     inflight_packets: BTreeMap<SeqNum, InflightPacket>,
     unordered_packets: BTreeMap<SeqNum, Vec<u8>>,
+    /// Bytes acknowledged and handed to the reader, not yet read: they
+    /// count against the receive window, so a slow reader slows the sender.
+    queued: usize,
     duplicate_ack_count: usize,
     duplicate_ack_count_helper: SeqNum,
     max_unacked_bytes: u32,
@@ -85,6 +88,7 @@ impl Tcb {
             state: TcpState::Listen,
             inflight_packets: BTreeMap::new(),
             unordered_packets: BTreeMap::new(),
+            queued: 0,
             duplicate_ack_count: 0,
             duplicate_ack_count_helper: seq.into(),
             max_unacked_bytes,
@@ -115,16 +119,39 @@ impl Tcb {
         self.duplicate_ack_count >= self.max_count_for_dup_ack
     }
 
-    pub(super) fn add_unordered_packet(&mut self, seq: SeqNum, buf: Vec<u8>) {
+    pub(super) fn add_unordered_packet(&mut self, seq: SeqNum, mut buf: Vec<u8>) {
         if seq < self.ack {
-            #[rustfmt::skip]
-            log::warn!("{:?}: Received packet seq {seq} < self ack {}, len = {}", self.state, self.ack, buf.len());
+            // A retransmission: keep only what was not received yet.
+            let old = self.ack.distance(seq) as usize;
+            if old >= buf.len() {
+                log::trace!("{:?}: Received packet seq {seq} < self ack {}, len = {}", self.state, self.ack, buf.len());
+                return;
+            }
+            buf.drain(..old);
+            self.unordered_packets.insert(self.ack, buf);
+            return;
+        }
+        // A segment sent again with more data replaces the shorter one.
+        if self.unordered_packets.get(&seq).is_some_and(|b| b.len() >= buf.len()) {
             return;
         }
         self.unordered_packets.insert(seq, buf);
     }
     pub(super) fn get_available_read_buffer_size(&self) -> usize {
-        self.read_buffer_size.saturating_sub(self.get_unordered_packets_total_len())
+        self.read_buffer_size
+            .saturating_sub(self.get_unordered_packets_total_len())
+            .saturating_sub(self.queued)
+    }
+    /// `n` bytes went to the reader's queue.
+    pub(super) fn add_queued(&mut self, n: usize) {
+        self.queued += n;
+    }
+    /// The reader took `n` bytes from its queue.
+    pub(super) fn take_queued(&mut self, n: usize) {
+        self.queued = self.queued.saturating_sub(n);
+    }
+    pub(super) fn get_read_buffer_size(&self) -> usize {
+        self.read_buffer_size
     }
     #[inline]
     pub(crate) fn get_unordered_packets_total_len(&self) -> usize {
@@ -137,12 +164,20 @@ impl Tcb {
 
         while remaining_bytes > 0 {
             if let Some(seq) = self.unordered_packets.keys().next().copied() {
-                if seq != self.ack {
+                if seq > self.ack {
                     break; // sequence number is not continuous, stop extracting
                 }
 
                 // remove and get the first packet
                 let mut payload = self.unordered_packets.remove(&seq).unwrap();
+                if seq < self.ack {
+                    // It overlaps data already extracted: keep only the rest.
+                    let old = self.ack.distance(seq) as usize;
+                    if old >= payload.len() {
+                        continue;
+                    }
+                    payload.drain(..old);
+                }
                 let payload_len = payload.len();
 
                 if payload_len <= remaining_bytes {
@@ -288,24 +323,25 @@ impl Tcb {
         self.inflight_packets.get(&seq)
     }
 
+    /// The packets to send again; None when one was sent too many times:
+    /// the connection must then be reset, for skipping the packet would
+    /// leave a hole in the stream the other side waits on forever.
     #[must_use]
-    pub(crate) fn collect_timed_out_inflight_packets(&mut self) -> Vec<InflightPacket> {
+    pub(crate) fn collect_timed_out_inflight_packets(&mut self) -> Option<Vec<InflightPacket>> {
         let mut retransmit_list = Vec::new();
-
-        self.inflight_packets.retain(|_, packet| {
-            if packet.retransmit_count >= self.max_retransmit_count {
-                log::warn!("Packet with seq {:?} reached max retransmit count, dropping packet", packet.seq);
-                return false; // remove this packet
-            }
+        for packet in self.inflight_packets.values_mut() {
             if packet.is_timed_out() {
+                if packet.retransmit_count >= self.max_retransmit_count {
+                    log::warn!("Packet with seq {:?} reached max retransmit count, resetting", packet.seq);
+                    return None;
+                }
                 packet.retransmit_count += 1;
                 packet.retransmit_timeout *= 2; // increase timeout exponentially
                 packet.send_time = std::time::Instant::now();
                 retransmit_list.push(packet.clone());
             }
-            true // keep the packet in the inflight_packets
-        });
-        retransmit_list
+        }
+        Some(retransmit_list)
     }
 
     pub(crate) fn get_inflight_packets_total_len(&self) -> usize {
@@ -465,34 +501,66 @@ mod tests {
 
     #[test]
     fn test_retransmit_with_exponential_backoff() {
+        let rto = Duration::from_millis(10);
         let mut tcb = Tcb::new(
             SeqNum(1000),
             1500,
             MAX_UNACK,
             READ_BUFFER_SIZE,
             MAX_COUNT_FOR_DUP_ACK,
-            RTO,
+            rto,
             MAX_RETRANSMIT_COUNT,
         );
 
         tcb.add_inflight_packet(vec![1; 500]).unwrap();
+        assert!(tcb.collect_timed_out_inflight_packets().unwrap().is_empty(), "not timed out yet");
 
         // Simulate retransmission timeouts
         for i in 0..MAX_RETRANSMIT_COUNT {
             // Simulate a timeout for the first packet
-            let timeout = tcb.inflight_packets.values().next().unwrap().retransmit_timeout + std::time::Duration::from_millis(100);
-            println!("timeout: {timeout:?}");
+            let timeout = tcb.inflight_packets.values().next().unwrap().retransmit_timeout + Duration::from_millis(5);
             std::thread::sleep(timeout);
 
-            let packets = tcb.collect_timed_out_inflight_packets();
+            let packets = tcb.collect_timed_out_inflight_packets().unwrap();
             assert_eq!(packets.len(), 1);
             let packet = &packets[0];
             assert_eq!(packet.retransmit_count, i + 1);
-            assert!(packet.retransmit_timeout > RTO);
+            assert!(packet.retransmit_timeout > rto);
         }
 
-        let packets = tcb.collect_timed_out_inflight_packets();
-        assert!(packets.is_empty());
-        assert!(tcb.inflight_packets.is_empty());
+        // Unacknowledged after the last retransmission: the connection must
+        // be reset, and the packet is not silently dropped.
+        std::thread::sleep(tcb.inflight_packets.values().next().unwrap().retransmit_timeout + Duration::from_millis(5));
+        assert!(tcb.collect_timed_out_inflight_packets().is_none());
+        assert_eq!(tcb.inflight_packets.len(), 1);
+    }
+
+    #[test]
+    fn test_overlapping_segments_and_window() {
+        let mut tcb = Tcb::new(SeqNum(1000), 1500, MAX_UNACK, 4000, MAX_COUNT_FOR_DUP_ACK, RTO, MAX_RETRANSMIT_COUNT);
+        tcb.add_unordered_packet(SeqNum(1000), vec![1; 500]);
+        tcb.add_unordered_packet(SeqNum(1200), vec![2; 600]); // overlaps the first: 1200..1800
+        let data = tcb.consume_unordered_packets(usize::MAX).unwrap();
+        assert_eq!(data.len(), 800, "1000..1800, the overlap once");
+        assert_eq!(data[..500], vec![1; 500]);
+        assert_eq!(data[500..], vec![2; 300]);
+        assert_eq!(tcb.ack, SeqNum(1800));
+        assert!(tcb.unordered_packets.is_empty());
+
+        // A retransmission that starts before ack keeps only its new bytes.
+        tcb.add_unordered_packet(SeqNum(1700), vec![3; 200]);
+        assert_eq!(tcb.consume_unordered_packets(usize::MAX).unwrap(), vec![3; 100]);
+        tcb.add_unordered_packet(SeqNum(1500), vec![4; 100]); // entirely old
+        assert!(tcb.consume_unordered_packets(usize::MAX).is_none());
+
+        // Bytes handed to the reader count until it takes them.
+        assert_eq!(tcb.get_recv_window(), 4000);
+        tcb.add_queued(3000);
+        tcb.add_unordered_packet(SeqNum(5000), vec![5; 500]); // out of order
+        assert_eq!(tcb.get_recv_window(), 500);
+        tcb.add_queued(1000);
+        assert_eq!(tcb.get_recv_window(), 0);
+        tcb.take_queued(2500);
+        assert_eq!(tcb.get_recv_window(), 2000);
     }
 }

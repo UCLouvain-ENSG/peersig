@@ -16,6 +16,8 @@ publish = false
 [lib]
 name = "ipstack"
 path = "src/lib.rs"
+# The examples in the documentation need the tun crate.
+doctest = false
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["std"] }

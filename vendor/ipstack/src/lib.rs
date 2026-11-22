@@ -439,3 +439,6 @@ async fn process_upstream_recv<Device: AsyncWrite + Unpin + 'static>(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

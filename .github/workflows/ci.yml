@@ -75,7 +75,7 @@ jobs:
           java-version: '17'
       - run: sudo apt-get update && sudo apt-get install -y libpcap-dev
       # The native side's tests run on the runner itself.
-      - run: cargo test --locked -p peersig-android
+      - run: cargo test --locked -p peersig-android -p ipstack
       - name: NDK and cargo-ndk
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "platforms;android-35" "build-tools;35.0.0" > /dev/null
