@@ -84,8 +84,12 @@ struct Kind {
 @available(macOS 26.0, *)
 func check(_ model: SystemLanguageModel, _ entry: String) async throws -> String? {
     let session = LanguageModelSession(model: model, instructions: instructions)
+    // Greedy: the same answer every time. Xcode 27 renamed `sampling` to
+    // `samplingMode`, which Xcode 26 (CI's) does not know.
+    var options = GenerationOptions()
+    options.sampling = .greedy
     do {
-        let k = try await session.respond(to: "Entry: " + entry, generating: Kind.self, options: GenerationOptions(samplingMode: .greedy)).content
+        let k = try await session.respond(to: "Entry: " + entry, generating: Kind.self, options: options).content
         return sensitive.contains(k.kind) ? k.kind : nil
     } catch let e as LanguageModelSession.GenerationError {
         switch e {
