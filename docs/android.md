@@ -48,7 +48,13 @@ Android shows an app other apps' traffic only through a VPN
   alone answers every SYN at once, so before 0.1.13 every connection
   seemed to open: apps racing IPv6 against IPv4 (Happy Eyeballs) kept a
   dead IPv6 path instead of falling back, and sent their ClientHello into
-  a connection that ended 20 s later.
+  a connection that ended 20 s later. While the phone changes networks
+  (Wi-Fi to mobile data, one access point to another), a connection that
+  fails at once (no route yet, no IPv6 address yet on the new network) is
+  tried again for up to 15 s, the app's SYN held meanwhile. Before 0.1.18
+  the app got a reset at once: Play services counted each one as a
+  failure of the VPN's network, and on a commute stopped trying through
+  it for hours, so notifications came only once the VPN was off.
 - A copy of each packet the apps send (except bare TCP ACKs) goes to the
   probe's own pipeline (`crates/probe`, as a library), which finds the
   ClientHellos (TCP, QUIC, DTLS), computes their JA4 with the same code as

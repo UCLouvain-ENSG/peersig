@@ -58,6 +58,15 @@ const UDP_IDLE: Duration = Duration::from_secs(120);
 /// least 2 h 4 min): push channels stay idle for many minutes.
 const TCP_IDLE: Duration = Duration::from_secs(7440);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+/// While the phone changes networks (Wi-Fi to mobile data, one access
+/// point to another), a connection can fail at once for a few seconds: no
+/// route yet, or no IPv6 address yet on the new network while the VPN
+/// still carries IPv6. The app's SYN is held meanwhile, and the connection
+/// tried again this often, for this long, before the app gets a reset.
+/// Push channels (Google's, kept by Play services) count each reset as a
+/// failure of the VPN's network and back off, up to hours on a commute.
+const RETRY_EVERY: Duration = Duration::from_millis(500);
+const RETRY_FOR: Duration = Duration::from_secs(15);
 /// After its SYN went to ipstack, a flow's retransmitted SYNs go there too.
 const GIVEN_TTL: Duration = Duration::from_secs(10);
 /// An open connection ipstack never took is closed after this long.
@@ -163,7 +172,7 @@ impl Gate {
 
     async fn open(self: Arc<Self>, src: SocketAddr, dst: SocketAddr, syn: Vec<u8>) {
         let up = match self.dns.upstream(dst) {
-            Some(to) => tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(to)).await.ok().and_then(Result::ok),
+            Some(to) => connect(to).await,
             None => None,
         };
         match up {
@@ -198,6 +207,33 @@ impl Gate {
         flows.insert((src, dst), Flow::Given(Instant::now()));
         s
     }
+}
+
+/// Opens the connection to `to`, trying again while the network is
+/// changing (`RETRY_FOR`). A refusal or a timeout is final.
+async fn connect(to: SocketAddr) -> Option<TcpStream> {
+    let start = Instant::now();
+    loop {
+        let left = CONNECT_TIMEOUT.checked_sub(start.elapsed())?;
+        match tokio::time::timeout(left, TcpStream::connect(to)).await {
+            Ok(Ok(s)) => return Some(s),
+            Ok(Err(e)) if changing_network(&e) && start.elapsed() + RETRY_EVERY < RETRY_FOR => tokio::time::sleep(RETRY_EVERY).await,
+            _ => return None,
+        }
+    }
+}
+
+/// Errors of a phone between networks: no route or address yet, the
+/// network going away under the socket, or not yet allowed on the new one.
+fn changing_network(e: &io::Error) -> bool {
+    use io::ErrorKind::*;
+    // ENONET ("not on the network"): Linux's, Android's.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    const ENONET: Option<i32> = Some(libc::ENONET);
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    const ENONET: Option<i32> = None;
+    matches!(e.kind(), NetworkUnreachable | HostUnreachable | NetworkDown | AddrNotAvailable | ConnectionAborted | PermissionDenied)
+        || (ENONET.is_some() && e.raw_os_error() == ENONET)
 }
 
 /// The app's address and the destination of a TCP SYN (without ACK), from
@@ -478,10 +514,10 @@ async fn tcp(mut down: IpStackTcpStream, gate: Arc<Gate>, dns: Arc<Dns>, counter
         // headers, or a port reused at once): connect now.
         None => {
             let Some(dst) = dns.upstream(down.peer_addr()) else { return };
-            match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(dst)).await {
-                Ok(Ok(s)) => s,
+            match connect(dst).await {
+                Some(s) => s,
                 // Dropping `down` resets the app's connection.
-                _ => {
+                None => {
                     counters.failed.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
@@ -527,6 +563,30 @@ async fn udp(mut down: IpStackUdpStream, dns: Arc<Dns>, counters: Arc<Counters>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_changes_are_retried() {
+        for errno in [libc::ENETUNREACH, libc::EHOSTUNREACH, libc::ENETDOWN, libc::EADDRNOTAVAIL, libc::ECONNABORTED, libc::EPERM] {
+            assert!(changing_network(&io::Error::from_raw_os_error(errno)), "errno {}", errno);
+        }
+        for errno in [libc::ECONNREFUSED, libc::ETIMEDOUT, libc::ECONNRESET] {
+            assert!(!changing_network(&io::Error::from_raw_os_error(errno)), "errno {}", errno);
+        }
+    }
+
+    /// A refusal is final at once; an unreachable network is tried again,
+    /// then given up.
+    #[tokio::test]
+    async fn connect_retries_only_while_the_network_changes() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        drop(l);
+        let t = Instant::now();
+        assert!(connect(([127, 0, 0, 1], port).into()).await.is_none());
+        assert!(t.elapsed() < Duration::from_secs(1), "refused: no retry");
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        assert!(connect(l.local_addr().unwrap()).await.is_some());
+    }
 
     #[test]
     fn dns_goes_to_the_network() {
