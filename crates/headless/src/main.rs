@@ -232,13 +232,31 @@ pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// The items, those that may say something about the person first (a
+/// sensitive word in their application or server name,
+/// `peersig_proto::sensitive`), each marked with why.
 pub fn print_items(items: &[(Observed, bool)], json: bool) {
-    for (o, out) in items {
+    let why = |o: &Observed| -> Vec<String> {
+        peersig_proto::sensitive::reasons(&o.item, &[])
+            .into_iter()
+            .map(|r| match r {
+                peersig_proto::sensitive::Reason::Category(c) | peersig_proto::sensitive::Reason::Own(c) => c,
+            })
+            .collect()
+    };
+    let (first, rest): (Vec<_>, Vec<_>) = items.iter().partition(|(o, _)| !why(o).is_empty());
+    if !json && !first.is_empty() {
+        println!("Look at these first: they may say something about you.");
+    }
+    for (i, (o, out)) in first.iter().chain(rest.iter()).enumerate() {
         if json {
             if !out {
                 println!("{}", o.key);
             }
             continue;
+        }
+        if i == first.len() && !first.is_empty() {
+            println!("The others:");
         }
         let (what, ja4, app) = match &o.item {
             Item::Hello { transport, ja4, app, .. } => (transport.clone(), ja4.clone(), app),
@@ -249,15 +267,17 @@ pub fn print_items(items: &[(Observed, bool)], json: bool) {
             Some(v) => format!("{} {}", app.name, v),
             None => app.name.clone(),
         };
+        let flags = why(o);
         println!(
-            "{} {}  {:>7}  {:<36}  {:<6}  {:<40}  {}",
+            "{} {}  {:>7}  {:<36}  {:<6}  {:<40}  {}{}",
             item_id(&o.key),
             if *out { "out" } else { "   " },
             o.count,
             ja4,
             app.kind,
             name,
-            what
+            what,
+            if flags.is_empty() { String::new() } else { format!("  [{}]", flags.join(", ")) }
         );
     }
 }

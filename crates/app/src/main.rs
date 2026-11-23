@@ -5,6 +5,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod model;
 mod probe;
 
 use std::path::{Path, PathBuf};
@@ -70,8 +71,8 @@ async fn get_items(core: State<'_, Shared>, current: bool) -> R<serde_json::Valu
 }
 
 #[tauri::command]
-async fn set_excluded(app: AppHandle, core: State<'_, Shared>, key: String, excluded: bool) -> R<()> {
-    let view = commands::set_excluded(&core, key, excluded).await?;
+async fn set_excluded(app: AppHandle, core: State<'_, Shared>, keys: Vec<String>, excluded: bool) -> R<()> {
+    let view = commands::set_excluded(&core, keys, excluded).await?;
     let _ = app.emit("state", view);
     Ok(())
 }
@@ -89,15 +90,8 @@ async fn enroll(
 }
 
 #[tauri::command]
-async fn save_settings(
-    core: State<'_, Shared>,
-    wake: State<'_, Wake>,
-    relay: String,
-    share_domains: bool,
-    review_hours: u32,
-    spread_minutes: u32,
-) -> R<()> {
-    commands::save_settings(&core, &wake.0, relay, share_domains, review_hours, spread_minutes).await
+async fn save_settings(core: State<'_, Shared>, wake: State<'_, Wake>, form: commands::SettingsForm) -> R<()> {
+    commands::save_settings(&core, &wake.0, form).await
 }
 
 #[tauri::command]
@@ -107,10 +101,9 @@ async fn send_now(core: State<'_, Shared>, wake: State<'_, Wake>) -> R<()> {
 
 #[tauri::command]
 async fn set_paused(app: AppHandle, core: State<'_, Shared>, paused: bool) -> R<()> {
-    let c = core.lock().await;
-    probe::set_paused(&c.p.settings.logs(), paused).map_err(e2s)?;
-    let view = c.view();
-    drop(c);
+    let logs = core.lock().await.p.settings.logs();
+    probe::set_paused(&logs, paused).map_err(e2s)?;
+    let view = commands::state(&core).await;
     update_tray(&app, &view);
     let _ = app.emit("state", view);
     Ok(())
@@ -286,6 +279,12 @@ impl Host for Desktop {
     #[cfg(target_os = "linux")]
     fn tick(&self, s: &core::Settings) {
         keep_linux_probe(&self.0, s);
+    }
+    fn has_model(&self) -> bool {
+        model::helper().is_some()
+    }
+    fn ask_model(&self, names: &[String]) -> peersig_client::review::ModelReply {
+        model::ask(names)
     }
 }
 

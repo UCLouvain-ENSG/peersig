@@ -57,6 +57,9 @@ jobs:
         run: |
           cargo build --locked --release -p peersig-probe
           cp target/release/peersig-probe crates/app/binaries/peersig-probe-$(rustc -vV | sed -n 's/host: //p')
+      - if: runner.os == 'macOS'
+        name: Model helper
+        run: crates/app/hint/build.sh
       - run: cargo test --locked -p peersig-app
       - run: node --check crates/app/ui/app.js
 

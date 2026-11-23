@@ -79,7 +79,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 .chip { display: inline-block; padding: 0 7px; border-radius: 999px; background: var(--chip); font-size: 12px; }
 label.field { display: block; margin: 10px 0; }
 label.field span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 3px; }
-input[type=text], input[type=number], input[type=url] {
+input[type=text], input[type=number], input[type=url], input[type=search] {
   width: 100%; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line);
   background: var(--bg); color: var(--fg); font: inherit;
 }
@@ -95,6 +95,13 @@ details summary { cursor: pointer; }
 .card.stacked { margin-bottom: 10px; }
 .row.flush { margin-top: 0; }
 .scroll { overflow-x: auto; }
+/* The review: why an item comes first, and each application's items. */
+.chip.flag { background: transparent; border: 1px solid var(--warn); color: var(--warn); margin: 3px 4px 0 0; }
+main h3 { font-size: 14px; margin: 18px 0 6px; }
+details.group { border-bottom: 1px solid var(--line); padding: 6px 2px; }
+details.group summary { list-style-position: outside; margin-left: 16px; }
+details.group summary input { vertical-align: middle; }
+details.group .scroll { margin: 6px 0 4px 16px; }
 /* Phones (the Android app). */
 @media (max-width: 600px) {
   header { padding: 12px 14px 4px; }

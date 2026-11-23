@@ -6,6 +6,7 @@
 //!
 //! - [`core`]: the state, the report cycle, the ballots' schedule;
 //! - [`local`]: what the capture left on this device (status, logs);
+//! - [`review`]: which items the review shows first, and why;
 //! - [`worker`]: the loop that opens, prepares and sends reports;
 //! - [`commands`]: what the window asks for;
 //! - [`tray`]: what the tray icon (Android: the notification) says.
@@ -13,6 +14,7 @@
 pub mod commands;
 pub mod core;
 pub mod local;
+pub mod review;
 pub mod tray;
 pub mod worker;
 
@@ -54,6 +56,17 @@ pub trait Host: Send + Sync + 'static {
     fn show(&self, view: &View);
     /// At the start of each tick (the Linux app keeps its probe running).
     fn tick(&self, _settings: &Settings) {}
+    /// Whether the device has a language model of its own to point out
+    /// sensitive names in the review (macOS: Apple Intelligence).
+    fn has_model(&self) -> bool {
+        false
+    }
+    /// Asks the device's own model which of `names` could say something
+    /// sensitive about the person (`review::subjects`). Blocks for about a
+    /// second a name. Nothing may leave the device.
+    fn ask_model(&self, _names: &[String]) -> review::ModelReply {
+        review::ModelReply::Unavailable("no model on this device".into())
+    }
 }
 
 #[cfg(test)]

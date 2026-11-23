@@ -11,6 +11,8 @@ let state = null;
 let tab = "overview";
 let itemsCurrent = false;
 let items = null;
+let itemsLoading = false;
+let search = "";
 let autostartOn = null;
 
 // ------------------------------------------------------------ helpers
@@ -76,20 +78,31 @@ function setTab(t) {
 }
 
 async function loadItems() {
-  items = await invoke("get_items", { current: itemsCurrent });
-  render();
+  itemsLoading = true;
+  if (tab === "items") render();
+  try {
+    items = await invoke("get_items", { current: itemsCurrent });
+  } finally {
+    itemsLoading = false;
+  }
+  if (tab === "items") render();
 }
+
+// A count with its noun: "1 item", "2,345 items".
+const count = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : (many || one + "s")}`;
 
 // ------------------------------------------------------------ header
 
 function renderPill() {
   const p = document.getElementById("pill");
   let text = "…", cls = "pill";
+  const obs = state.observer ? "Observer · " : "";
   if (!state.enrolled) [text, cls] = ["Not enrolled", "pill warn"];
   else if (state.paused) [text, cls] = ["Capture paused", "pill warn"];
   else if (!state.probe.running) [text, cls] = ["Capture not running", "pill bad"];
   else if (state.reports.some((r) => r.state === "sending")) [text, cls] = ["Sending report…", "pill ok"];
   else [text, cls] = ["Capturing", "pill ok"];
+  if (state.enrolled) text = obs + text;
   p.textContent = text;
   p.className = cls;
   for (const b of document.querySelectorAll("#tabs button")) {
@@ -162,12 +175,50 @@ function androidCaptureCard() {
   else if (p.running) body.push(el("div", { class: "big ok" }, "Capturing"), el("p", { class: "muted small" }, "Through PeerSig's VPN, on this phone only."));
   else if (p.error) body.push(el("div", { class: "big bad" }, "Cannot capture"), el("p", { class: "muted" }, p.error), el("div", { class: "row" }, start("Start capture")));
   else body.push(el("div", { class: "big bad" }, "Not running"), el("p", { class: "muted" }, "PeerSig's VPN is not on."), el("div", { class: "row" }, start("Start capture")));
-  body.push(el("p", {}, `${p.hellos.toLocaleString()} handshakes seen since ${iso(p.started)}`, el("br"), el("span", { class: "muted small" }, `Last: ${iso(p.last_hello)}`)));
+  body.push(countsBlock());
   body.push(el("div", { class: "row" },
-    el("button", { class: "btn", onclick: () => call("set_paused", { paused: !state.paused }).then(refresh) }, state.paused ? "Resume capture" : "Pause capture"),
+    pauseButton(),
     el("button", { class: "btn", onclick: () => call("open_logs") }, "Export local logs"),
   ));
   return el("div", { class: "card" }, el("h2", {}, "Capture"), ...body);
+}
+
+// Handshakes counted in the logs: those not sent yet (from the period under
+// review, or the current one once it is sent) and all of them. The
+// probe's own count starts again whenever it does (an update, a restart).
+function countsBlock() {
+  const p = state.probe, c = state.counts;
+  const since = (t) => (state.observer ? `${utcDay(t)} (UTC)` : day(t));
+  const last = el("span", { class: "muted small" }, `Last: ${iso(p.last_hello)}`);
+  if (!c) return el("p", {}, `${p.hellos.toLocaleString()} handshakes seen since ${iso(p.started)}`, el("br"), last);
+  return el("p", {},
+    el("strong", {}, count(c.pending, "handshake")), ` not sent yet, since ${since(c.since)}`, el("br"),
+    el("span", { class: "muted" }, `${count(c.total, "handshake")} in all${c.first ? `, since ${day(c.first)}` : ""}`), el("br"),
+    last);
+}
+
+// Pausing answers at once: the button says so while the call runs.
+function pauseButton() {
+  const b = el("button", { class: "btn" }, state.paused ? "Resume capture" : "Pause capture");
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    b.textContent = state.paused ? "Resuming…" : "Pausing…";
+    try { await call("set_paused", { paused: !state.paused }); } finally { refresh(); }
+  });
+  return b;
+}
+
+// A button that shows it is working while its call runs (installing the
+// capture service waits for the administrator's password, then for the
+// service to start).
+function busyButton(cls, label, busy, run) {
+  const b = el("button", { class: cls }, label);
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    b.textContent = busy;
+    try { await run(); } finally { b.disabled = false; b.textContent = label; refresh(); }
+  });
+  return b;
 }
 
 function captureCard() {
@@ -179,23 +230,23 @@ function captureCard() {
     body.push(el("p", { class: "muted" }, state.os === "windows"
       ? "The capture service needs to be installed once. Windows will ask for an administrator's permission."
       : "The capture service needs to be installed once. Your computer will ask for an administrator password."));
-    body.push(el("div", { class: "row" }, el("button", { class: "btn primary", onclick: async () => { await call("install_probe"); refresh(); } }, "Install capture service")));
+    body.push(el("div", { class: "row" }, busyButton("btn primary", "Install capture service", "Installing… (asks for a password)", () => call("install_probe"))));
     return el("div", { class: "card" }, el("h2", {}, "Capture"), ...body);
   }
   if (state.probe_outdated) {
     body.push(el("div", { class: "notice" }, `The capture service still runs ${p.tool}, not the probe that came with this version of PeerSig: installing PeerSig does not update the service. Update it to get this version's fixes. `,
       state.os === "windows" ? "Windows will ask for an administrator's permission." : "Your computer will ask for an administrator password."));
-    body.push(el("div", { class: "row" }, el("button", { class: "btn primary", onclick: async () => { await call("install_probe"); refresh(); } }, "Update capture service")));
+    body.push(el("div", { class: "row" }, busyButton("btn primary", "Update capture service", "Updating… (asks for a password)", () => call("install_probe"))));
   }
   if (state.paused) body.push(el("div", { class: "big warn" }, "Paused"), el("p", { class: "muted" }, "The capture device is closed: nothing is being looked at."));
   else if (p.running) body.push(el("div", { class: "big ok" }, "Capturing"));
   else if (p.error) body.push(el("div", { class: "big bad" }, "Cannot capture"), el("p", { class: "muted" }, p.error, el("br"), "The service tries again every 30 seconds."));
   else body.push(el("div", { class: "big bad" }, "Not running"), el("p", { class: "muted" }, "The service is installed but has not reported in the last 30 seconds."));
-  body.push(el("p", {}, `${p.hellos.toLocaleString()} handshakes seen since ${iso(p.started)}`, el("br"), el("span", { class: "muted small" }, `Last: ${iso(p.last_hello)}`)));
+  body.push(countsBlock());
   if (p.running && !p.pktap && state.os === "macos")
     body.push(el("div", { class: "notice" }, "No per-packet process data: applications are identified less reliably."));
   body.push(el("div", { class: "row" },
-    el("button", { class: "btn", onclick: () => call("set_paused", { paused: !state.paused }).then(refresh) }, state.paused ? "Resume capture" : "Pause capture"),
+    pauseButton(),
     el("button", { class: "btn", onclick: () => call("open_logs") }, "Open local logs"),
   ));
   return el("div", { class: "card" }, el("h2", {}, "Capture"), ...body);
@@ -217,7 +268,11 @@ function reportCard() {
     body.push(el("div", { class: "muted small" }, period(r.from, r.to)));
     if (r.state === "review") {
       body.push(el("div", { class: "big" }, `Sends in ${hours(r.review_until - state.now)}`));
-      body.push(el("p", { class: "muted" }, "Look at the items and untick anything you do not want to send."));
+      const v = state.review;
+      body.push(el("p", { class: "muted" }, v
+        ? (v.flagged ? `${count(v.items, "item")}: ${count(v.flagged, "item")} to look at first, which may say something about you.` : `${count(v.items, "item")}, none that seems to say something about you.`)
+        : "Look at the items and untick anything you do not want to send."));
+      body.push(anonymousNote());
       body.push(el("div", { class: "row" },
         el("button", { class: "btn primary", onclick: () => setTab("items") }, "Review items"),
         el("button", { class: "btn", onclick: () => call("send_now").then(refresh) }, "Send now")));
@@ -232,7 +287,16 @@ function reportCard() {
     }
     if (r.error && r.state !== "failed") body.push(el("div", { class: "notice error small" }, r.error));
   }
+  if (state.observer)
+    body.push(el("p", { class: "muted small" }, `Dedicated observer: each day is sent on its own${state.settings.review_hours ? ` after ${state.settings.review_hours} hours of review` : ", shortly after midnight UTC, without review"}, and published without threshold.`));
   return el("div", { class: "card" }, el("h2", {}, state.observer ? "Daily report" : "This week's report"), ...body);
+}
+
+// Why the review is a safeguard, not the protection.
+function anonymousNote() {
+  return state.observer
+    ? el("p", { class: "muted small" }, "An observer's report is not anonymous: the server knows it comes from this observer, and publishes it as it is.")
+    : el("p", { class: "muted small" }, "Your ballots are anonymous anyway: the server cannot tell they come from you, nor which come from the same person. The review is a second safeguard, in case the relay were compromised.");
 }
 
 function connectionCard() {
@@ -262,44 +326,141 @@ function describe(item) {
   return [item.type];
 }
 
+// Why an item is shown first, as chips.
+const MODEL = "Apple Intelligence";
+function flagChips(o) {
+  return (o.flags || []).map((f) =>
+    el("span", { class: "chip flag", title: f.by === "list" ? "A sensitive word" : f.by === "own" ? "Your name, or one of your words (Settings)" : `What ${MODEL} said` },
+      f.by === "own" ? `contains “${f.why}”` : f.by === "model" ? `${MODEL}: ${f.why}` : f.why));
+}
+
+// Removes items from the reports, or puts them back, and says so in their
+// rows without rebuilding the page (its scroll and open groups stay).
+async function setExcluded(list, excluded) {
+  await call("set_excluded", { keys: list.map((o) => o.key), excluded });
+  for (const o of list) {
+    o.excluded = excluded;
+    for (const r of o.rows || []) {
+      r.tr.className = excluded ? "excluded" : "";
+      r.box.checked = !excluded;
+    }
+  }
+  for (const g of groupsOf(list)) g.sync();
+}
+
+const groupsOf = (list) => [...new Set(list.map((o) => o.group).filter(Boolean))];
+
+function itemRow(o, showFlags) {
+  const it = o.item;
+  const app = it.app || {};
+  const box = el("input", { type: "checkbox", checked: !o.excluded, title: "Send this item" });
+  const tr = el("tr", { class: o.excluded ? "excluded" : "" },
+    el("td", {}, box),
+    el("td", {}, el("div", {}, app.name, app.version ? el("span", { class: "muted" }, " " + app.version) : null,
+        o.merged ? el("span", { class: "muted small", title: o.merged.join("\n") }, ` · ${o.merged.length} merged`) : null),
+      el("span", { class: "chip" }, app.kind || ""), app.engine ? el("span", { class: "muted small" }, " " + app.engine) : null,
+      app.id || app.team_id ? el("div", { class: "mono muted small" }, [app.id, app.team_id ? `team ${app.team_id}` : null].filter(Boolean).join(" · ")) : null,
+      showFlags ? el("div", {}, ...flagChips(o)) : null),
+    el("td", {}, ...describe(it)),
+    el("td", { class: "muted" }, o.count.toLocaleString()),
+    el("td", { class: "muted small" }, [...o.procs].join(", ")));
+  box.addEventListener("change", () => setExcluded([o], !box.checked).catch(() => (box.checked = !o.excluded)));
+  (o.rows = o.rows || []).push({ tr, box });
+  return tr;
+}
+
+function itemTable(list, showFlags) {
+  return el("div", { class: "scroll" }, el("table", {},
+    el("thead", {}, el("tr", {}, el("th", {}, "Send"), el("th", {}, "Application"), el("th", {}, "What"), el("th", {}, "Seen ¹"), el("th", {}, "Processes ¹"))),
+    el("tbody", {}, list.map((o) => itemRow(o, showFlags)))));
+}
+
+// One application's items, folded: a box for all of them, the rows drawn
+// when opened (a week can hold thousands).
+function appGroup(name, list, open) {
+  const box = el("input", { type: "checkbox", title: "Send this application's items" });
+  const g = {
+    sync() {
+      const out = list.filter((o) => o.excluded).length;
+      box.checked = out === 0;
+      box.indeterminate = out > 0 && out < list.length;
+    },
+  };
+  for (const o of list) o.group = g;
+  g.sync();
+  box.addEventListener("click", (e) => e.stopPropagation());
+  box.addEventListener("change", () => setExcluded(list, !box.checked).catch(() => g.sync()));
+  const kind = (list[0].item.app || {}).kind;
+  const details = el("details", { class: "group" },
+    el("summary", {}, box, " ", el("strong", {}, name), " ", kind ? el("span", { class: "chip" }, kind) : null,
+      el("span", { class: "muted small" }, ` ${count(list.length, "item")}`)));
+  let drawn = false;
+  const draw = () => {
+    if (drawn || !details.open) return;
+    drawn = true;
+    details.append(itemTable(list, false));
+  };
+  details.addEventListener("toggle", draw);
+  if (open) { details.open = true; draw(); }
+  return details;
+}
+
+function matches(o, q) {
+  if (!q) return true;
+  const it = o.item, app = it.app || {};
+  return [app.name, app.id, app.version, app.team_id, it.domain, it.ja4, ...(o.flags || []).map((f) => f.why)]
+    .some((v) => v && v.toLowerCase().includes(q));
+}
+
 function renderItems() {
   const head = el("div", { class: "row" },
     el("div", { class: "segmented" },
       el("button", { class: "btn", "aria-pressed": String(!itemsCurrent), onclick: () => { itemsCurrent = false; loadItems(); } }, `${state.observer ? "Day" : "Week"} being reported`),
       el("button", { class: "btn", "aria-pressed": String(itemsCurrent), onclick: () => { itemsCurrent = true; loadItems(); } }, state.observer ? "Today so far" : "This week so far")),
-    el("button", { class: "btn", onclick: loadItems }, "Refresh"));
-  if (!items) return el("div", {}, head, el("p", { class: "muted" }, "Loading…"));
-  const rows = items.items.map((o) => {
-    const it = o.item;
-    const box = el("input", { type: "checkbox", checked: !o.excluded, title: "Send this item" });
-    box.addEventListener("change", async () => {
-      await call("set_excluded", { key: o.key, excluded: !box.checked });
-      o.excluded = !box.checked;
-      tr.className = o.excluded ? "excluded" : "";
-    });
-    const app = it.app || {};
-    const tr = el("tr", { class: o.excluded ? "excluded" : "" },
-      el("td", {}, box),
-      el("td", {}, el("div", {}, app.name, app.version ? el("span", { class: "muted" }, " " + app.version) : null,
-          o.merged ? el("span", { class: "muted small", title: o.merged.join("\n") }, ` · ${o.merged.length} merged`) : null),
-        el("span", { class: "chip" }, app.kind || ""), app.engine ? el("span", { class: "muted small" }, " " + app.engine) : null,
-        app.id || app.team_id ? el("div", { class: "mono muted small" }, [app.id, app.team_id ? `team ${app.team_id}` : null].filter(Boolean).join(" · ")) : null),
-      el("td", {}, ...describe(it)),
-      el("td", { class: "muted" }, o.count.toLocaleString()),
-      el("td", { class: "muted small" }, [...o.procs].join(", ")));
-    return tr;
-  });
+    el("button", { class: "btn", onclick: loadItems, disabled: itemsLoading }, itemsLoading ? "Reading the logs…" : "Refresh"));
+  if (!items) return el("div", {}, head, el("p", { class: "muted" }, "Reading the logs… The first time can take a few seconds."));
+  for (const o of items.items) o.rows = [];
+  const q = search.trim().toLowerCase();
+  const shown = items.items.filter((o) => matches(o, q));
+  const first = shown.filter((o) => (o.flags || []).length);
+  const rest = shown.filter((o) => !(o.flags || []).length);
+  const byApp = new Map();
+  for (const o of rest) {
+    const name = (o.item.app || {}).name || o.item.type;
+    if (!byApp.has(name)) byApp.set(name, []);
+    byApp.get(name).push(o);
+  }
+  const apps = [...byApp.keys()].sort((a, b) => a.localeCompare(b));
   const sk = items.skipped;
   const os = items.items.map((o) => o.item.os).find(Boolean);
   const what = state.observer
     ? (items.current ? `Today so far: ${utcDay(items.from)} (UTC)` : `Day being reported: ${utcDay(items.from)} (UTC)`)
     : `${items.current ? "This week so far" : "Week being reported"}: ${weekRange(items.from, items.to)}`;
+  const nApps = new Set(items.items.map((o) => (o.item.app || {}).name)).size;
+  const find = el("input", { type: "search", placeholder: "Find an application, a server name, a fingerprint…", value: search });
+  find.addEventListener("input", () => {
+    search = find.value;
+    clearTimeout(find.timer);
+    find.timer = setTimeout(() => { render(); const f = document.querySelector("input[type=search]"); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }, 250);
+  });
+  const flagged = items.items.filter((o) => (o.flags || []).length);
   return el("div", {},
     head,
-    el("p", { class: "muted" }, `${what}. ${items.items.length} items.`),
-    el("div", { class: "scroll" }, el("table", {},
-      el("thead", {}, el("tr", {}, el("th", {}, "Send"), el("th", {}, "Application"), el("th", {}, "What"), el("th", {}, "Seen ¹"), el("th", {}, "Processes ¹"))),
-      el("tbody", {}, rows.length ? rows : el("tr", {}, el("td", { colspan: 5, class: "muted" }, "Nothing yet."))))),
+    el("div", { class: "notice" }, anonymousNote().textContent,
+      state.observer ? "" : " Look at the items shown first: they may say something about you. The rest can be left as they are."),
+    el("p", { class: "muted" }, `${what}. ${count(items.items.length, "item")} from ${count(nApps, "application")}; ${flagged.length ? `${count(flagged.length, "item")} to look at first` : "none to look at first"}.`),
+    modelLine(),
+    el("label", { class: "field" }, find),
+    el("h3", {}, q ? `To look at first, matching “${search.trim()}” (${first.length})` : `To look at first (${first.length})`),
+    first.length
+      ? el("div", {}, itemTable(first, true),
+          el("div", { class: "row" },
+            el("button", { class: "btn", onclick: () => setExcluded(first.filter((o) => !o.excluded), true) }, "Leave all of these out"),
+            el("button", { class: "btn", onclick: () => setExcluded(first.filter((o) => o.excluded), false) }, "Send all of these")))
+      : el("p", { class: "muted" }, q ? "None matches." : `None: no item contains a sensitive word or one of yours${state.model && !state.model.problem ? `, and ${MODEL} pointed out none` : ""}.`),
+    el("h3", {}, `Everything else, by application (${count(rest.length, "item")})`),
+    el("p", { class: "muted small" }, "Untick an application to leave all its items out, or open it to choose."),
+    el("div", {}, apps.map((a) => appGroup(a, byApp.get(a), !!q && apps.length <= 20))),
     el("p", { class: "muted small" }, `¹ Stays on this ${device()}: how often, and which ${android() ? "apps" : "processes"}. Everything else in a ticked row is sent, as shown: the application (${android() ? appFields() : "name, version, kind, engine, bundle id, signing team"}), the transport and fingerprint, and the server name of a “connection to” row (those carry no version). Each item also gives the system and its major version${os ? ` (${os})` : ""}. Once per ${unit()}, however often it was seen.`),
     el("p", { class: "muted small" },
       `Not collected: ${sk.unattributed} handshakes with no known application; ${sk.browser_domains} names contacted by browsers (browsing history is never collected)` +
@@ -307,7 +468,21 @@ function renderItems() {
     el("p", { class: "muted small" }, state.observer
       ? "Ticked items go in one report that the server knows comes from this observer, and are published with the day, as they are: no threshold."
       : "Each ticked item goes as a separate anonymous ballot: the server cannot tell which items come from the same person. An item is published only once enough participants reported it."),
+    el("p", { class: "muted small" }, `Shown first: items whose application or server name contains a sensitive word (health, dating, religion, politics, money troubles…) or one of your words (Settings)${state.model ? `, and those ${MODEL} points out, on this Mac` : ""}. Nothing of this leaves your ${device()}.`),
   );
+}
+
+// What the device's model is doing, where it has one (macOS).
+function modelLine() {
+  const m = state.model;
+  if (!m) return null;
+  let text;
+  if (!state.settings.use_model) text = `${MODEL} is not asked (Settings).`;
+  else if (m.problem) text = `${MODEL}: ${m.problem}. Only the word lists are used.`;
+  else if (m.names && m.checked < m.names) text = `${MODEL} is looking at the names, on this Mac: ${m.checked.toLocaleString()} of ${m.names.toLocaleString()} so far. Refresh to see what it points out.`;
+  else if (m.names) text = `${MODEL} looked at all ${m.names.toLocaleString()} names, on this Mac.`;
+  else return null;
+  return el("p", { class: "muted small", id: "model-line" }, text);
 }
 
 // ------------------------------------------------------------ history
@@ -365,7 +540,7 @@ function renderPrivacy() {
     el("ul", { class: "plain" },
       el("li", {}, el("strong", {}, `Little leaves your ${device()}. `), `Per week: which applications (${appFields()}) sent which handshake fingerprint, on which system and major version. Optional: the server names (SNI) non-browser applications connect to, with the fingerprint used. No addresses, times, counts, file paths, user or host names.`),
       el("li", {}, el("strong", {}, "Less specific items. "), "Before you review them, items that differ only in a detail are merged: versions after major.minor (2.1.322 and 2.1.326 go as 2.1.*) and numbered server names (p177-fmip.icloud.com and p63-fmip.icloud.com go as p*-fmip.icloud.com). A rare build points to fewer people, and more items fit the weekly budget. An item you remove is never merged into another."),
-      el("li", {}, el("strong", {}, "You review it first. "), `Each week's list waits ${state.settings.review_hours} hours before it is sent; untick anything.`),
+      el("li", {}, el("strong", {}, "You review it first. "), `Each week's list waits ${state.settings.review_hours} hours before it is sent; untick anything. Items that may say something about you come first: a sensitive word (health, dating, religion…) or your name in their application or server name${state.model ? `, or what ${MODEL} points out with its model on this Mac` : ""}. This stays on your ${device()}.`),
       el("li", {}, el("strong", {}, "Anonymous ballots. "), "Every item is a separate ballot carrying a token the server signed without seeing it (blind signature, as in anonymous e-voting). The server knows the ballot comes from an enrolled participant, not which one, nor which ballots come from the same person."),
       el("li", {}, el("strong", {}, "Hidden address. "), state.settings.relay ? "Ballots go through a relay: it sees your address but not the content; the server sees the content but not your address. This hides who sends what as long as the relay and the server are run by different parties." : "No relay is configured: the server could see your address when ballots arrive."),
       el("li", {}, el("strong", {}, "Thresholds. "), c ? `The study publishes an item only once at least ${c.k_hello} participants reported it in the same week (${c.k_domain} for server names).` : "Items are published only above a participant threshold."),
@@ -387,11 +562,17 @@ function renderSettings() {
   const domains = el("input", { type: "checkbox", checked: s.share_domains });
   const review = el("input", { type: "number", min: 0, max: 96, value: s.review_hours });
   const spread = el("input", { type: "number", min: 5, max: 1440, value: s.spread_minutes });
+  const words = el("input", { type: "text", value: (s.flag_words || []).join(", "), placeholder: "your company, your town, a relative's name…" });
+  const model = el("input", { type: "checkbox", checked: s.use_model });
+  const auto_words = state.own_words.filter((w) => !(s.flag_words || []).some((f) => f.toLowerCase().includes(w)));
   const auto = el("input", { type: "checkbox", checked: !!autostartOn });
   auto.addEventListener("change", async () => (autostartOn = await call("autostart", { enabled: auto.checked })));
   const save = el("button", { class: "btn primary" }, "Save");
   save.addEventListener("click", async () => {
-    await call("save_settings", { relay: relay.value, shareDomains: domains.checked, reviewHours: Number(review.value), spreadMinutes: Number(spread.value) });
+    await call("save_settings", { form: {
+      relay: relay.value, shareDomains: domains.checked, reviewHours: Number(review.value), spreadMinutes: Number(spread.value),
+      flagWords: words.value.split(",").map((w) => w.trim()).filter(Boolean), useModel: model.checked,
+    } });
     await refresh();
   });
   const del = el("input", { type: "checkbox" });
@@ -403,11 +584,16 @@ function renderSettings() {
   });
   return el("div", { class: "grid" },
     el("div", { class: "card" },
-      el("h2", {}, "Sending"),
+      el("h2", {}, "Sending and review"),
       el("label", { class: "field" }, el("span", {}, "Relay"), relay),
       el("label", { class: "check" }, domains, el("span", {}, "Share the server names (SNI) non-browser applications connect to")),
       el("label", { class: "field" }, el("span", {}, `Hours to review each ${unit()}'s report before it is sent`), review),
       state.observer ? null : el("label", { class: "field" }, el("span", {}, "Spread the ballots over (minutes)"), spread),
+      el("label", { class: "field" }, el("span", {}, "Words the review looks for first, separated by commas"), words),
+      el("p", { class: "muted small" }, auto_words.length
+        ? `Also your name and your account's, as this ${device()} knows them: ${auto_words.join(", ")}. They stay on this ${device()}.`
+        : `They stay on this ${device()}.`),
+      state.model ? el("label", { class: "check" }, model, el("span", {}, `Ask ${MODEL} which names to look at first. Its model runs on this Mac: nothing leaves it.`)) : null,
       el("div", { class: "row" }, save)),
     el("div", { class: "card" },
       el("h2", {}, `This ${device()}`),
@@ -442,8 +628,15 @@ function render() {
 for (const b of document.querySelectorAll("#tabs button")) b.addEventListener("click", () => setTab(b.dataset.tab));
 listen("state", (e) => {
   state = e.payload;
-  // Do not rebuild a form being typed in.
+  // Do not rebuild a form being typed in, nor the review (its scroll, open
+  // groups and search stay; it reads the logs again on Refresh).
   if (tab === "settings" || (!state.enrolled && tab !== "privacy")) { renderPill(); return; }
+  if (tab === "items") {
+    renderPill();
+    const line = document.getElementById("model-line"), now = modelLine();
+    if (line && now) line.replaceWith(now);
+    return;
+  }
   render();
 });
 invoke("autostart", {}).then((v) => (autostartOn = v)).catch(() => {});

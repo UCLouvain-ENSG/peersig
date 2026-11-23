@@ -60,6 +60,10 @@ jobs:
           ext=""; [ "$RUNNER_OS" = "Windows" ] && ext=".exe"
           cargo build --locked --release -p peersig-probe --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/release/peersig-probe$ext crates/app/binaries/peersig-probe-${{ matrix.target }}$ext
+      # Apple's on-device model for the review (crates/app/hint): Xcode 26 or later.
+      - if: runner.os == 'macOS'
+        name: Model helper
+        run: crates/app/hint/build.sh ${{ matrix.target }}
       - name: Build the app
         working-directory: crates/app
         env:

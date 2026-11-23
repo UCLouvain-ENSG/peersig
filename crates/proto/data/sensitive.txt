@@ -1,0 +1,72 @@
+# Words that make an item worth a second look in the review: an
+# application or a server name that may say something about the person
+# (crates/proto/src/sensitive.rs). The review shows these items first; it
+# never removes anything by itself.
+#
+# `[category]` starts a category, shown to the participant. Then words,
+# separated by commas:
+# - a word of 5 letters or more matches the start of a word in the name
+#   ("pregnan" matches "com.pregnancy.app");
+# - a shorter one, or one in quotes, a whole word only ("tor" matches
+#   "tor.example.org", not "monitor"; "hallow" not "halloween");
+# - several words, the same whole words in a row ("period tracker");
+# - a name with a dot, that server name and the names under it
+#   ("flo.health" matches "api.flo.health").
+# Names are lower-cased, and cut into words at anything not a letter or a
+# digit: "com.grindrapp.android" is "com grindrapp android".
+
+[health]
+"health", healthcare, medical, medicine, clinic, hospital, doctor,
+doctolib, patient, pharmacy, pharmacie, apotheek, therapy, therapist,
+psychiatr, psycholog, mental, depression, anxiety, diabetes, diabetic,
+insulin, glucose, cancer, oncolog, "chemo", chemotherap, hiv, aids, prep,
+sexual health, pregnan, fertility, ovulation, period tracker, menstrua,
+contracept, abortion, ivf, midwife, flo.health, clue, natural cycles,
+mysugr, dexcom, omnipod, freestyle libre, betterhelp, talkspace,
+headspace, calm, rehab, addiction, alcoholics, sober, quit smoking,
+weightwatchers, noom, disability, alzheimer, dementia, autism, autistic,
+adhd, epilep, hearing aid, sleep apnea
+
+[sexuality and dating]
+grindr, "tinder", "bumble", "hinge", okcupid, happn, feeld, "scruff",
+"hornet", jackd, planetromeo, meetic, match.com, eharmony, lovoo, badoo,
+dating, lgbt, lgbtq, lgbtqia, queer, lesbian, gay, bisexual, transgender,
+nonbinary, porn, xxx, sex, sexy, "adult", nsfw, onlyfans, chaturbate,
+pornhub, xvideos, xhamster, redtube, youporn, stripchat, fetish, kink,
+escort, fansly
+
+[religion]
+bible, youversion, quran, koran, muslim, "islam", islamic, mosque,
+"salah", prayer, pray, church, catholic, christian, evangel, jewish,
+judaism, synagogue, torah, "hallow", buddhis, "hindu", hinduism, sikh,
+mormon, jehovah, jw.org, rosary, missal, sermon
+
+[politics and unions]
+politic, election, petition, activis, protest, amnesty, greenpeace,
+extinction rebellion, trade union, "syndicat", vakbond, fgtb, abvv, cgsp,
+acod, csc, acv, cgslb, aclvb, cgt, cfdt, democrat, republican,
+socialist, communist, liberal, labour party, green party, "ecolo",
+"groen", vooruit, mr.be, ptb, pvda, n-va, vlaams belang, defi
+
+[money troubles and gambling]
+casino, poker, pokerstars, bet, betting, bet365, betway, bwin, unibet,
+ladbrokes, napoleon games, gambling, lottery, lotto, loterie,
+euromillions, sportsbook, "slots", debt, payday, loan, credit repair,
+collection agency, bankrupt, pawn
+
+[crypto-currencies]
+cryptocurrenc, bitcoin, ethereum, binance, coinbase, "kraken",
+ledger live, metamask, trezor, "exodus", bitvavo, bitpanda,
+blockchain.com
+
+[law, police and migration]
+lawyer, attorney, avocat, advocaat, "court", tribunal, police, politie,
+immigration, asylum, refugee, residence permit, deportation, prison,
+probation, bail
+
+[job search]
+job search, jobsearch, "indeed", glassdoor, stepstone, monster.com,
+jobat, actiris, vdab, "forem", france travail, pole emploi, recruit
+
+[anonymity tools]
+tor, torproject, "onion", i2p

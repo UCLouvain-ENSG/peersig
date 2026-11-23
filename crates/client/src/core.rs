@@ -30,7 +30,8 @@ use peersig_proto::wire::{Ballot, Config, ObserverReceipt, ObserverReport};
 use peersig_proto::{code, EpochSpec, Item};
 
 use crate::local::{self, ProbeStatus};
-use crate::Host;
+use crate::review::{self, Answers};
+use crate::{Host, Shared};
 
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -70,6 +71,13 @@ pub struct Settings {
     pub logs_dir: String,
     /// When the participant agreed, RFC 3339.
     pub consented: Option<String>,
+    /// Words that would name the person (their company, their town...):
+    /// the review shows the items that contain them first, with those of
+    /// the account's name. Stay on this device.
+    pub flag_words: Vec<String>,
+    /// Ask the device's own language model (macOS: Apple Intelligence)
+    /// which names could say something sensitive, for the review.
+    pub use_model: bool,
 }
 
 impl Default for Settings {
@@ -84,6 +92,8 @@ impl Default for Settings {
             // The app's own (`Host::default_logs_dir`), set by `Core::load`.
             logs_dir: String::new(),
             consented: None,
+            flag_words: Vec::new(),
+            use_model: true,
         }
     }
 }
@@ -178,6 +188,46 @@ pub struct Persisted {
     /// Items the participant removed (by key); they are never sent.
     pub excluded: BTreeSet<String>,
     pub reports: BTreeMap<u32, Report>,
+    /// ClientHellos in each daily log (`20261123`), kept after the probe
+    /// deletes the log (two weeks), for the total the window shows.
+    pub seen: BTreeMap<String, u64>,
+}
+
+/// The handshakes counted in the logs, for the window: those not reported
+/// yet, and all of them. Read from the logs, not from the probe, whose
+/// count starts again with each start (an update, a restart).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Counts {
+    /// Start of the first period not sent yet: the one under review, or
+    /// the current one once the last is sent.
+    pub since: i64,
+    pub pending: u64,
+    pub total: u64,
+    /// The first day counted (noon, local time).
+    pub first: Option<i64>,
+}
+
+/// The report under review, for the overview.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Review {
+    pub epoch: u32,
+    pub items: usize,
+    /// Items the review shows first (`review::flags`).
+    pub flagged: usize,
+}
+
+/// The device's model (`Host::ask_model`), for the window.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct Model {
+    /// Names of the periods shown that it has looked at, and all of them.
+    pub checked: usize,
+    pub names: usize,
+    pub running: bool,
+    /// Why it cannot run (Apple Intelligence off...), or what went wrong.
+    pub problem: Option<String>,
+    /// Not before this time again, after a problem.
+    #[serde(skip)]
+    pub retry_at: i64,
 }
 
 pub struct Core {
@@ -187,10 +237,20 @@ pub struct Core {
     pub config: Option<(i64, Config)>,
     pub last_error: Option<String>,
     pub probe: ProbeStatus,
-    pub cache: local::Cache,
+    pub logs: local::SharedLogs,
     /// The report (epoch) whose review the participant asked to skip. Only
     /// that one: a click never carries over to a later week's review.
     pub send_now: Option<u32>,
+    /// The account's own words (`local::own_words`).
+    pub own: Vec<String>,
+    /// What the device's model said (`review::Answers`).
+    pub answers: Answers,
+    /// Names of the periods shown, for the device's model, most needed
+    /// first.
+    pub subjects: Vec<String>,
+    pub model: Model,
+    pub counts: Option<Counts>,
+    pub review: Option<Review>,
 }
 
 /// What the window shows.
@@ -212,6 +272,50 @@ pub struct View {
     pub reports: Vec<Report>,
     pub last_error: Option<String>,
     pub now: i64,
+    /// Handshakes not reported yet, and in all.
+    pub counts: Option<Counts>,
+    /// The report under review: how many items, how many to look at first.
+    pub review: Option<Review>,
+    /// The device's model, where it has one.
+    pub model: Option<Model>,
+    /// Words the review looks for: the account's, then the participant's.
+    pub own_words: Vec<String>,
+}
+
+/// What reading the logs needs, taken from the core under its lock and
+/// used without it (`read`): the first read of two weeks of logs takes
+/// seconds.
+#[derive(Clone)]
+pub struct Reader {
+    logs: local::SharedLogs,
+    dir: PathBuf,
+    pub cycle: Cycle,
+    share_domains: bool,
+    pub excluded: BTreeSet<String>,
+}
+
+impl Reader {
+    /// Reads what is new in the logs, then runs `f` on them.
+    pub fn with<T>(&self, f: impl FnOnce(&peersig_proto::logs::Index) -> T) -> T {
+        let mut logs = self.logs.lock().unwrap_or_else(|e| e.into_inner());
+        logs.with(&self.dir, self.cycle.spec, self.share_domains, f)
+    }
+
+    /// Items of an epoch (a day for an observer), as the participant sees
+    /// them: near-identical items merged, except those the participant
+    /// removed. An observer's are not merged: exact versions are what it
+    /// is for, it has no token budget, and it is published anyway.
+    pub fn items(&self, epoch: u32) -> (Vec<Observed>, Skipped) {
+        let (items, skipped) = self.with(|i| i.items(epoch));
+        (if self.cycle.observer { items } else { merge::merge(items, &self.excluded) }, skipped)
+    }
+}
+
+/// Runs `f` on the logs, on a thread that may block, without the core's
+/// lock. `None` before the server's configuration is known.
+pub async fn read<T: Send + 'static>(core: &Shared, f: impl FnOnce(&Reader) -> T + Send + 'static) -> Option<T> {
+    let r = core.lock().await.reader()?;
+    tokio::task::spawn_blocking(move || f(&r)).await.ok()
 }
 
 impl Core {
@@ -226,7 +330,77 @@ impl Core {
         if p.settings.logs_dir.is_empty() {
             p.settings.logs_dir = host.default_logs_dir().display().to_string();
         }
-        Core { path, host, p, config: None, last_error: None, probe: ProbeStatus::default(), cache: local::Cache::default(), send_now: None }
+        let answers = if host.has_model() { Answers::load(&path) } else { Answers::default() };
+        Core {
+            path,
+            host,
+            p,
+            config: None,
+            last_error: None,
+            probe: ProbeStatus::default(),
+            logs: local::SharedLogs::default(),
+            send_now: None,
+            own: local::own_words(),
+            answers,
+            subjects: Vec::new(),
+            model: Model::default(),
+            counts: None,
+            review: None,
+        }
+    }
+
+    /// Where the state is saved (`state.json`).
+    pub fn state_path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    /// What reading the logs needs (`read`).
+    pub fn reader(&self) -> Option<Reader> {
+        Some(Reader {
+            logs: self.logs.clone(),
+            dir: self.p.settings.logs(),
+            cycle: self.cycle()?,
+            share_domains: self.p.settings.share_domains,
+            excluded: self.p.excluded.clone(),
+        })
+    }
+
+    /// Words the review looks for (`review::own_words`).
+    pub fn own_words(&self) -> Vec<String> {
+        review::own_words(&self.own, &self.p.settings.flag_words)
+    }
+
+    /// The first period whose handshakes are not reported yet: the one
+    /// being reported until its report is sent (or can no longer be), then
+    /// the current one.
+    pub fn unsent_from(&self, cy: &Cycle) -> u32 {
+        if cy.report >= cy.current {
+            return cy.current;
+        }
+        match self.p.reports.get(&cy.report) {
+            Some(r) if matches!(r.state, ReportState::Sent | ReportState::Failed) => cy.current,
+            _ => cy.report,
+        }
+    }
+
+    /// Takes in the handshakes counted in each daily log (each kept at its
+    /// highest: the probe deletes logs after two weeks), and the count of
+    /// those not reported yet. Returns whether a day was added (worth
+    /// saving: the last day's count changes all the time).
+    pub fn set_counts(&mut self, per_file: &[(String, u64)], since: i64, pending: u64) -> bool {
+        let mut new_day = false;
+        for (day, n) in per_file {
+            let e = self.p.seen.entry(day.clone()).or_insert_with(|| {
+                new_day = true;
+                0
+            });
+            *e = (*e).max(*n);
+        }
+        let first = self.p.seen.keys().next().and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y%m%d").ok()).and_then(|d| {
+            d.and_hms_opt(12, 0, 0)?.and_local_timezone(chrono::Local).single().map(|t| t.timestamp())
+        });
+        self.counts = Some(Counts { since, pending, total: self.p.seen.values().sum(), first });
+        new_day
     }
 
     pub fn save(&self) -> Result<()> {
@@ -279,18 +453,11 @@ impl Core {
             }).collect(),
             last_error: self.last_error.clone(),
             now: now(),
+            counts: self.counts.clone(),
+            review: self.review.clone().filter(|r| self.current_report().is_some_and(|c| c.epoch == r.epoch)),
+            model: self.host.has_model().then(|| self.model.clone()),
+            own_words: self.own_words(),
         }
-    }
-
-    /// Items of an epoch (a day for an observer), as the participant sees
-    /// them: near-identical items merged, except those the participant
-    /// removed. An observer's are not merged: exact versions are what it
-    /// is for, it has no token budget, and it is published anyway.
-    pub fn items(&mut self, epoch: u32) -> Option<(Vec<Observed>, Skipped)> {
-        let cy = self.cycle()?;
-        let s = &self.p.settings;
-        let (items, skipped) = self.cache.get(&s.logs(), cy.spec, epoch, s.share_domains);
-        Some((if cy.observer { items } else { merge::merge(items, &self.p.excluded) }, skipped))
     }
 
     /// Opens the report of the current reporting epoch if none exists.
@@ -516,6 +683,42 @@ mod tests {
         assert_eq!(core.due_for_preparation(), None, "a click last week must not skip this review");
     }
 
+    /// The handshakes not sent yet start from the week under review until
+    /// its report is sent, then from the current week; the total keeps the
+    /// days whose logs the probe deleted, and never goes down.
+    #[test]
+    fn counts_start_again_after_a_report() {
+        let tmp = std::env::temp_dir().join(format!("peersig-counts-{}", std::process::id()));
+        let mut core = Core::load(&tmp, host());
+        let t = now();
+        let spec = EpochSpec { origin: t - EpochSpec::WEEK - 3600, length: EpochSpec::WEEK };
+        let cy = Cycle { spec, current: 1, report: 0, observer: false };
+        assert_eq!(core.unsent_from(&cy), 0, "no report yet: last week is not sent");
+        let r = Report {
+            epoch: 0, from: spec.start(0), to: spec.end(0), state: ReportState::Review, review_until: t, send_by: spec.end(1),
+            real: vec![], dropped: 0, total: 0, sent: 0, queue: vec![], error: None, started: None, finished: None, key_id: None,
+        };
+        core.p.reports.insert(0, r);
+        assert_eq!(core.unsent_from(&cy), 0, "under review");
+        core.p.reports.get_mut(&0).unwrap().state = ReportState::Sent;
+        assert_eq!(core.unsent_from(&cy), 1, "sent: the count starts again");
+        assert_eq!(core.unsent_from(&Cycle { spec, current: 0, report: 0, observer: false }), 0, "first week");
+
+        let day = |d: &str, n: u64| (d.to_string(), n);
+        assert!(core.set_counts(&[day("20261117", 10), day("20261118", 5)], spec.start(1), 5));
+        assert!(!core.set_counts(&[day("20261117", 10), day("20261118", 7)], spec.start(1), 7), "the same days");
+        // The 17th's log is gone: its count stays.
+        assert!(core.set_counts(&[day("20261118", 7), day("20261119", 1)], spec.start(1), 8));
+        let c = core.counts.clone().unwrap();
+        assert_eq!((c.pending, c.total), (8, 18));
+        assert_eq!(day_of(c.first.unwrap()), "20261117");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    fn day_of(t: i64) -> String {
+        chrono::DateTime::from_timestamp(t, 0).unwrap().with_timezone(&chrono::Local).format("%Y%m%d").to_string()
+    }
+
     /// An observer's code: daily periods, one report, counted apart.
     #[tokio::test(flavor = "multi_thread")]
     async fn observer_reports_the_day_before() {
@@ -572,7 +775,7 @@ mod tests {
         assert_eq!(e as i64, today - 1);
         let r = core.current_report().unwrap();
         assert_eq!((r.from, r.to), (cy.spec.start(e), cy.spec.end(e)));
-        let real: Vec<Item> = core.items(e).unwrap().0.into_iter().map(|o| o.item).collect();
+        let real: Vec<Item> = core.reader().unwrap().items(e).0.into_iter().map(|o| o.item).collect();
         assert_eq!(real.len(), 1);
         assert!(observe(&core.p.settings, e, real.clone()).await.unwrap().is_some());
         observed(&mut core, e, real.clone());
@@ -650,7 +853,7 @@ mod tests {
         assert!(core.open_report());
         assert!(!core.open_report(), "one report per epoch");
 
-        let (obs, skipped) = core.items(0).unwrap();
+        let (obs, skipped) = core.reader().unwrap().items(0);
         assert_eq!(obs.len(), 3, "{:?}", obs.iter().map(|o| o.item.label()).collect::<Vec<_>>());
         assert_eq!((skipped.unattributed, skipped.browser_domains), (1, 1));
         let removed = obs.iter().find(|o| o.item.label().contains("Removed")).unwrap().key.clone();

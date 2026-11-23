@@ -13,6 +13,8 @@
 //! - [`wire`]: API messages.
 //! - [`code`]: enrollment codes, and how to tell an observer's.
 //! - [`logs`]: reads the probe's daily logs into one period's items.
+//! - [`sensitive`]: which items the review shows first (sensitive
+//!   categories, the participant's own words).
 //! - `client` (feature `client`): the HTTP client used by the app.
 //! - `participant` (feature `client`): a week's ballots and their tokens,
 //!   for the app and the headless `peersig`.
@@ -25,6 +27,7 @@ pub mod logs;
 pub mod merge;
 pub mod oblivious;
 pub mod plan;
+pub mod sensitive;
 pub mod token;
 pub mod wire;
 

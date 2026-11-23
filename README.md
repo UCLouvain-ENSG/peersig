@@ -33,7 +33,7 @@ host names. On top of that, the system has several layers of protection:
 
 | Layer | What it does |
 | --- | --- |
-| Review | Each week's list waits 24 h in the app; the participant can untick anything. Nothing is sent while the app is not running. |
+| Review | Each week's list waits 24 h in the app; the participant can untick anything. Items that may say something about them (a sensitive word, their name, or what Apple's on-device model points out on a Mac) come first; this stays on the device. Nothing is sent while the app is not running. |
 | Anonymous ballots | Every item is a separate ballot with a blind-signed token ([RFC 9474](https://www.rfc-editor.org/rfc/rfc9474)), as in anonymous e-voting: the server knows a ballot comes from an enrolled participant, not which one, nor which ballots come from the same person. |
 | Oblivious HTTP | Ballots go through a relay ([RFC 9458](https://www.rfc-editor.org/rfc/rfc9458)): the relay sees addresses, not content; the server sees content, not addresses. Run by another party, neither can tell who sent what. |
 | Counts only | The server stores one counter per item and week. No ballots, no arrival times. |

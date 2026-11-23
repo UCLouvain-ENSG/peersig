@@ -11,7 +11,7 @@
 //! Never part of an item: addresses, ports, times, process ids, paths,
 //! command lines, host or user names. Items carry presence, not counts.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -351,6 +351,16 @@ pub struct Skipped {
     pub not_sni: u64,
 }
 
+impl Skipped {
+    fn add(&mut self, o: &Skipped) {
+        self.unattributed += o.unattributed;
+        self.browser_domains += o.browser_domains;
+        self.private_domains += o.private_domains;
+        self.domains_off += o.domains_off;
+        self.not_sni += o.not_sni;
+    }
+}
+
 /// Turns probe log records (`start`, `hello`, `domain`) into the items of
 /// one epoch.
 pub struct Collector {
@@ -358,11 +368,13 @@ pub struct Collector {
     epoch: u32,
     share_domains: bool,
     os: Option<String>,
-    items: BTreeMap<String, Observed>,
+    items: HashMap<Item, Observed>,
+    /// ClientHellos of the epoch, with an application or not.
+    pub hellos: u64,
     pub skipped: Skipped,
 }
 
-fn ts(v: &Value, field: &str) -> Option<i64> {
+pub(crate) fn ts(v: &Value, field: &str) -> Option<i64> {
     let s = v.get(field)?.as_str()?;
     chrono::DateTime::parse_from_rfc3339(s).ok().map(|t| t.timestamp())
 }
@@ -390,7 +402,40 @@ fn opt(v: &Value, k: &str) -> Option<String> {
 
 impl Collector {
     pub fn new(spec: EpochSpec, epoch: u32, share_domains: bool) -> Self {
-        Collector { spec, epoch, share_domains, os: None, items: BTreeMap::new(), skipped: Skipped::default() }
+        Collector { spec, epoch, share_domains, os: None, items: HashMap::new(), hellos: 0, skipped: Skipped::default() }
+    }
+
+    /// The system the next records come from, as a `start` record before
+    /// them would set it (`logs::Index` reads `start` records itself).
+    pub(crate) fn set_os(&mut self, os: &Option<String>) {
+        if self.os != *os {
+            self.os = os.clone();
+        }
+    }
+
+    /// Adds what another collector of the same epoch found (another file's
+    /// records).
+    pub fn absorb(&mut self, other: &Collector) {
+        for (item, o) in &other.items {
+            match self.items.get_mut(item) {
+                Some(e) => {
+                    e.count += o.count;
+                    e.first = e.first.min(o.first);
+                    e.last = e.last.max(o.last);
+                    for p in &o.procs {
+                        if e.procs.len() >= 8 {
+                            break;
+                        }
+                        e.procs.insert(p.clone());
+                    }
+                }
+                None => {
+                    self.items.insert(item.clone(), o.clone());
+                }
+            }
+        }
+        self.hellos += other.hellos;
+        self.skipped.add(&other.skipped);
     }
 
     fn in_epoch(&self, t: Option<i64>) -> Option<i64> {
@@ -398,19 +443,16 @@ impl Collector {
     }
 
     fn add(&mut self, item: Item, t: i64, proc_name: Option<String>, n: u64) {
-        if item.validate().is_err() {
-            return;
+        // Checked and keyed once per item, not once per record.
+        if !self.items.contains_key(&item) {
+            if item.validate().is_err() {
+                return;
+            }
+            let key = item.key();
+            let o = Observed { key, item: item.clone(), count: 0, first: t, last: t, procs: BTreeSet::new(), merged: Vec::new() };
+            self.items.insert(item.clone(), o);
         }
-        let key = item.key();
-        let e = self.items.entry(key.clone()).or_insert_with(|| Observed {
-            key,
-            item,
-            count: 0,
-            first: t,
-            last: t,
-            procs: BTreeSet::new(),
-            merged: Vec::new(),
-        });
+        let Some(e) = self.items.get_mut(&item) else { return };
         e.count += n;
         e.first = e.first.min(t);
         e.last = e.last.max(t);
@@ -430,6 +472,7 @@ impl Collector {
             }
             Some("hello") => {
                 let Some(t) = self.in_epoch(ts(v, "ts")) else { return };
+                self.hellos += 1;
                 let Some(os) = self.os.clone() else { return };
                 let app = v.get("app").cloned().unwrap_or(Value::Null);
                 let kind = opt(&app, "kind").unwrap_or_default();
@@ -500,8 +543,11 @@ impl Collector {
         }
     }
 
+    /// The items, in the order of their keys.
     pub fn finish(self) -> (Vec<Observed>, Skipped) {
-        (self.items.into_values().collect(), self.skipped)
+        let mut v: Vec<Observed> = self.items.into_values().collect();
+        v.sort_by(|a, b| a.key.cmp(&b.key));
+        (v, self.skipped)
     }
 }
 

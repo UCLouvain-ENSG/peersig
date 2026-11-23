@@ -150,7 +150,8 @@ impl Android {
             "get_state" => serde_json::to_value(rt.block_on(commands::state(core))).map_err(|e| e.to_string())?,
             "get_items" => rt.block_on(commands::items(core, arg_bool(a, "current"))),
             "set_excluded" => {
-                let view = rt.block_on(commands::set_excluded(core, arg_str(a, "key"), arg_bool(a, "excluded")))?;
+                let keys: Vec<String> = a.get("keys").cloned().and_then(|k| serde_json::from_value(k).ok()).unwrap_or_default();
+                let view = rt.block_on(commands::set_excluded(core, keys, arg_bool(a, "excluded")))?;
                 self.show(&view);
                 Value::Null
             }
@@ -158,9 +159,10 @@ impl Android {
                 let r = rt.block_on(commands::enroll(core, wake, arg_str(a, "server"), arg_str(a, "relay"), arg_str(a, "code"), arg_bool(a, "shareDomains")));
                 r.map(|_| Value::Null)?
             }
-            "save_settings" => rt
-                .block_on(commands::save_settings(core, wake, arg_str(a, "relay"), arg_bool(a, "shareDomains"), arg_u32(a, "reviewHours"), arg_u32(a, "spreadMinutes")))
-                .map(|_| Value::Null)?,
+            "save_settings" => {
+                let form: commands::SettingsForm = a.get("form").cloned().and_then(|f| serde_json::from_value(f).ok()).ok_or("bad settings")?;
+                rt.block_on(commands::save_settings(core, wake, form)).map(|_| Value::Null)?
+            }
             "send_now" => rt.block_on(commands::send_now(core, wake)).map(|_| Value::Null)?,
             "leave" => rt.block_on(commands::leave(core, arg_bool(a, "deleteLogs"))).map(|_| Value::Null)?,
             // The capture changed (paused, started): a new state now.

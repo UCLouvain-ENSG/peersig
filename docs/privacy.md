@@ -114,11 +114,36 @@ details (how often, which processes), and can untick any of them: an
 unticked item is never sent, that week or later. Nothing is sent while the
 app is not running, and the tray icon changes while ballots are being sent.
 
+A week holds hundreds or thousands of items, too many to read, so the
+review shows first those that may say something about the participant
+(`crates/client/src/review.rs`), and the rest folded by application:
+
+- a word of the list in `crates/proto/data/sensitive.txt` (health, dating,
+  religion, politics and unions, money troubles and gambling, law and
+  migration, job search...) in the application's name or id or the server
+  name;
+- the participant's own words: the account's name and their full name as
+  the system knows them, and words they add in Settings (their company,
+  their town);
+- on macOS with Apple Intelligence, what Apple's on-device model
+  (Foundation Models, through `crates/app/hint`) says of each application
+  and server name. The model runs on the Mac, never on Apple's servers
+  (not Private Cloud Compute), and the helper opens no connection. Its
+  answers are kept in `model.json` next to the app's state, so each name
+  is asked about once. Settings can turn it off.
+
+None of this leaves the device or changes what is sent: it only orders
+what the participant sees. The review is a second safeguard: the ballots
+are anonymous anyway (below), and it matters most if the relay were
+compromised, or for an item that names the person by itself (their own
+server's name).
+
 On a server, without the app ([headless.md](headless.md)), `peersig
 configure` shows what will be sent and asks for agreement; each week's
 list waits 24 hours the same way, `peersig items` shows it and `peersig
-exclude` leaves an item out for good. The ballots, tokens and relay are
-the app's (`crates/proto/src/participant.rs`).
+exclude` leaves an item out for good; items with a word of the sensitive
+list come first. The ballots, tokens and relay are the app's
+(`crates/proto/src/participant.rs`).
 
 ### 2. Unlinkable ballots (blind signatures)
 

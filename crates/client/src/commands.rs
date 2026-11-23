@@ -4,7 +4,8 @@
 
 use serde_json::{json, Value};
 
-use crate::core::{now, View};
+use crate::core::{self, now, View};
+use crate::review;
 use crate::{Shared, Wake};
 
 type R<T> = Result<T, String>;
@@ -21,18 +22,31 @@ pub async fn state(core: &Shared) -> View {
     c.view()
 }
 
-/// Items of the epoch being reported, or of the current one (`current`).
+/// Items of the epoch being reported, or of the current one (`current`),
+/// each with why the review shows it first (`flags`, empty for most). The
+/// logs are read without the core's lock: the window and the tray do not
+/// wait for them.
 pub async fn items(core: &Shared, current: bool) -> Value {
-    let mut c = core.lock().await;
-    let Some(cy) = c.cycle() else { return json!(null) };
-    let epoch = if current { cy.current } else { cy.report };
-    let Some((items, skipped)) = c.items(epoch) else { return json!(null) };
-    let excluded = c.p.excluded.clone();
+    let (own, answers) = {
+        let c = core.lock().await;
+        (c.own_words(), c.answers.names.clone())
+    };
+    let answers = review::Answers { names: answers };
+    let r = core::read(core, move |r| {
+        let cy = r.cycle;
+        let epoch = if current { cy.current } else { cy.report };
+        let (items, skipped) = r.items(epoch);
+        (cy, epoch, items, skipped, r.excluded.clone())
+    })
+    .await;
+    let Some((cy, epoch, items, skipped, excluded)) = r else { return json!(null) };
     let items: Vec<Value> = items
         .into_iter()
         .map(|o| {
+            let flags = review::flags(&o.item, &own, &answers);
             let mut v = serde_json::to_value(&o).unwrap_or_default();
             v["excluded"] = json!(excluded.contains(&o.key));
+            v["flags"] = json!(flags);
             v
         })
         .collect();
@@ -46,14 +60,16 @@ pub async fn items(core: &Shared, current: bool) -> Value {
     })
 }
 
-/// Removes an item from the reports, or puts it back. Returns the new
-/// state for the window.
-pub async fn set_excluded(core: &Shared, key: String, excluded: bool) -> R<View> {
+/// Removes items from the reports, or puts them back (an application's
+/// items at once). Returns the new state for the window.
+pub async fn set_excluded(core: &Shared, keys: Vec<String>, excluded: bool) -> R<View> {
     let mut c = core.lock().await;
-    if excluded {
-        c.p.excluded.insert(key);
-    } else {
-        c.p.excluded.remove(&key);
+    for key in keys {
+        if excluded {
+            c.p.excluded.insert(key);
+        } else {
+            c.p.excluded.remove(&key);
+        }
     }
     c.save().map_err(e2s)?;
     Ok(c.view())
@@ -87,13 +103,29 @@ pub async fn enroll(core: &Shared, wake: &Wake, server: String, relay: String, c
     Ok(())
 }
 
-pub async fn save_settings(core: &Shared, wake: &Wake, relay: String, share_domains: bool, review_hours: u32, spread_minutes: u32) -> R<()> {
+/// What the Settings tab saves.
+#[derive(serde::Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SettingsForm {
+    pub relay: String,
+    pub share_domains: bool,
+    pub review_hours: u32,
+    pub spread_minutes: u32,
+    pub flag_words: Vec<String>,
+    pub use_model: bool,
+}
+
+pub async fn save_settings(core: &Shared, wake: &Wake, f: SettingsForm) -> R<()> {
     let mut c = core.lock().await;
     let s = &mut c.p.settings;
-    s.relay = relay.trim().trim_end_matches('/').to_string();
-    s.share_domains = share_domains;
-    s.review_hours = review_hours.clamp(0, 96);
-    s.spread_minutes = spread_minutes.clamp(5, 24 * 60);
+    s.relay = f.relay.trim().trim_end_matches('/').to_string();
+    s.share_domains = f.share_domains;
+    s.review_hours = f.review_hours.clamp(0, 96);
+    s.spread_minutes = f.spread_minutes.clamp(5, 24 * 60);
+    s.flag_words = f.flag_words.iter().map(|w| w.trim().to_string()).filter(|w| !w.is_empty()).take(100).collect();
+    s.use_model = f.use_model;
+    // Turned on again: try the model now.
+    c.model.retry_at = 0;
     c.config = None;
     c.save().map_err(e2s)?;
     wake.notify_one();
@@ -116,6 +148,9 @@ pub async fn leave(core: &Shared, delete_logs: bool) -> R<()> {
     c.p.settings.consented = None;
     c.p.reports.clear();
     c.p.excluded.clear();
+    c.p.seen.clear();
+    c.counts = None;
+    c.review = None;
     c.config = None;
     c.save().map_err(e2s)?;
     if delete_logs {

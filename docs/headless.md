@@ -45,6 +45,10 @@ sudo peersig report                 # end this week's review now (an observer: s
 journalctl -u peersig               # what the service did
 ```
 
+`peersig items` lists first the items whose application or server name
+has a word of the sensitive list (`crates/proto/data/sensitive.txt`:
+health, dating, religion...), each with its category in brackets.
+
 Every command reads the settings file first; options and environment
 variables of the same names (`PEERSIG_CODE`, `PEERSIG_RELAY`,
 `PEERSIG_SHARE_DOMAINS`, `PEERSIG_REVIEW_HOURS`...) override it. The logs
