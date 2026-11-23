@@ -86,9 +86,18 @@ Android shows an app other apps' traffic only through a VPN
   network's own: queries are forwarded to the DNS servers of the Wi-Fi or
   mobile network, updated when it changes. No other resolver is used.
   Private DNS keeps working (its ClientHellos are credited to `dns`).
+  The app follows the best network that is not a VPN
+  (`registerBestMatchingNetworkCallback`; a network request on Android 10
+  and 11), not its default network: Android gives a VPN's own app its VPN
+  as default network. Before 0.1.19 the servers therefore stayed those of
+  the network the VPN started on, and after a move every lookup failed
+  (eduroam's servers refuse queries from elsewhere, a home router's cannot
+  be reached from outside) until the capture was paused and resumed.
 - IPv6 goes through the VPN only on networks that have it (a default
   route and a global address, not only a site-local or unique local one);
-  the VPN starts again when that changes. Multicast and broadcast stay outside.
+  the VPN starts again when that changes for 10 s (a new network often
+  gets its IPv6 address a few seconds after its IPv4 one). Multicast and
+  broadcast stay outside.
 - ICMP (ping) is not forwarded.
 
 ## Privacy

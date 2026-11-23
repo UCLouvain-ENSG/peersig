@@ -5,6 +5,11 @@
     <!-- Ballots, through the relay; and the connections the VPN forwards. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Android 10 and 11 only: following the network under the VPN takes a
+         network request there (CaptureService). -->
+    <uses-permission
+        android:name="android.permission.CHANGE_NETWORK_STATE"
+        android:maxSdkVersion="30" />
     <!-- The capture runs as a foreground service with a notification, as
          the desktop app shows a tray icon. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

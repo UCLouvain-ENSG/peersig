@@ -8,8 +8,11 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import java.net.Inet6Address
 import kotlin.concurrent.thread
@@ -42,6 +45,8 @@ class CaptureService : VpnService() {
         private const val ADDRESS_V6 = "fd50:ee5:91c::1"
         private const val DNS_V6 = "fd50:ee5:91c::2"
         private const val MTU = 10_000
+        /** How long a change of IPv6 must last before the VPN starts again. */
+        private const val IPV6_SETTLE_MS = 10_000L
 
         @Volatile private var running: CaptureService? = null
 
@@ -51,9 +56,18 @@ class CaptureService : VpnService() {
 
         fun isRunning(): Boolean = running != null
 
-        /** A new state: the notification follows. */
+        /** The notification's last content, not to post it again unchanged. */
+        private var shown: Pair<Tray, Boolean>? = null
+
+        /** A new state: the notification follows, when it changed. */
+        @Synchronized
         fun update(t: Tray) {
-            running?.let { s -> Notifications.showStatus(s, Notifications.status(s, t, s.app.paused)) }
+            running?.let { s ->
+                val now = t to s.app.paused
+                if (now == shown) return
+                shown = now
+                Notifications.showStatus(s, Notifications.status(s, t, s.app.paused))
+            }
         }
     }
 
@@ -63,13 +77,26 @@ class CaptureService : VpnService() {
     @Volatile private var up = false
     @Volatile private var ipv6 = false
 
+    /** The network under the VPN (Wi-Fi, mobile data), as the callback last told it. */
+    @Volatile private var underlying: Network? = null
+    @Volatile private var underlyingLp: LinkProperties? = null
+    private var lastDns: String? = null
+    /** The network callback's thread, and the delayed IPv6 check's. */
+    private val handler = Handler(Looper.getMainLooper())
+
     private val network = object : ConnectivityManager.NetworkCallback() {
         override fun onLinkPropertiesChanged(n: Network, lp: LinkProperties) {
-            if (!isVpn(n)) networkChanged(lp)
+            underlying = n
+            underlyingLp = lp
+            networkChanged(lp)
         }
 
         override fun onLost(n: Network) {
-            if (!isVpn(n)) networkChanged(null)
+            // Another network may already have taken its place.
+            if (n != underlying) return
+            underlying = null
+            underlyingLp = null
+            networkChanged(null)
         }
     }
 
@@ -80,9 +107,22 @@ class CaptureService : VpnService() {
         super.onCreate()
         running = this
         cm = getSystemService(ConnectivityManager::class.java)
-        // PeerSig is outside its own VPN: its default network is the
-        // phone's real one (Wi-Fi, mobile data).
-        cm.registerDefaultNetworkCallback(network)
+        // The best network that is not a VPN: the one the forwarded traffic
+        // takes, PeerSig being outside its own VPN. Not the default
+        // network's callback: Android gives a VPN's own app its VPN as
+        // default network, so the DNS servers stayed those of the network
+        // the VPN started on, which may refuse queries from elsewhere.
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build()
+        if (Build.VERSION.SDK_INT >= 31) {
+            cm.registerBestMatchingNetworkCallback(request, network, handler)
+        } else {
+            // The same network, as a request (CHANGE_NETWORK_STATE, in the
+            // manifest for these versions only).
+            cm.requestNetwork(request, network, handler)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -140,8 +180,11 @@ class CaptureService : VpnService() {
         } catch (e: Exception) {
             // Not registered.
         }
+        handler.removeCallbacks(ipv6Changed)
         stopVpn(null)
         running = null
+        // The next service posts its notification afresh.
+        synchronized(Companion) { shown = null }
         super.onDestroy()
     }
 
@@ -154,8 +197,14 @@ class CaptureService : VpnService() {
         lp?.routes?.any { it.isDefaultRoute && it.destination.address is Inet6Address } == true &&
             lp.linkAddresses.any { val a = it.address; a is Inet6Address && (a.address[0].toInt() and 0xe0) == 0x20 }
 
+    @Synchronized
     private fun setDns(lp: LinkProperties?) {
-        Native.setDns(lp?.dnsServers?.joinToString(",") { it.hostAddress ?: "" } ?: "")
+        val dns = lp?.dnsServers?.joinToString(",") { it.hostAddress ?: "" } ?: ""
+        if (dns != lastDns) {
+            Log.i("peersig", "network ${lp?.interfaceName ?: "none"}: DNS [$dns]")
+            lastDns = dns
+        }
+        Native.setDns(dns)
     }
 
     @Synchronized
@@ -164,8 +213,9 @@ class CaptureService : VpnService() {
             stopVpn("PeerSig's VPN is not allowed: open PeerSig to allow it.")
             return
         }
-        val net = cm.activeNetwork?.takeIf { !isVpn(it) }
-        val lp = net?.let { cm.getLinkProperties(it) }
+        // Once the VPN is up, the active network is the VPN: the callback's
+        // network then.
+        val lp = underlyingLp ?: cm.activeNetwork?.takeIf { !isVpn(it) }?.let { cm.getLinkProperties(it) }
         setDns(lp)
         ipv6 = hasIpv6(lp)
         Log.i("peersig", "starting the VPN: IPv6 ${if (ipv6) "on" else "off"}, DNS ${lp?.dnsServers}")
@@ -215,6 +265,15 @@ class CaptureService : VpnService() {
     /** New DNS servers; and the VPN again when IPv6 came or went. */
     private fun networkChanged(lp: LinkProperties?) {
         setDns(lp)
+        // A new network often gets its IPv6 address a few seconds after its
+        // IPv4 one: the VPN starts again (which ends every connection) only
+        // for a change that lasts.
+        handler.removeCallbacks(ipv6Changed)
+        if (up && lp != null && hasIpv6(lp) != ipv6) handler.postDelayed(ipv6Changed, IPV6_SETTLE_MS)
+    }
+
+    private val ipv6Changed = Runnable {
+        val lp = underlyingLp
         if (up && lp != null && hasIpv6(lp) != ipv6) {
             Log.i("peersig", "IPv6 ${if (ipv6) "went" else "came"}: the VPN again")
             startVpn()
