@@ -6,6 +6,7 @@
 
 pub mod attrib;
 pub mod binary;
+pub mod bits;
 pub mod bundle;
 /// Live capture and capture files. Android has neither: its packets come
 /// from the app's VPN interface.

@@ -64,7 +64,7 @@ One JSON object per line, with these `type`s:
 | type | when | content |
 | --- | --- | --- |
 | `start` | first line | tool and app-table versions, random session id, OS version and build, Mac model, device, kernel filter |
-| `process` | first time a process is seen | pid, start time, executable, bundle chain (id, name, version of each `.app`/`.framework`/`.xpc`), code signature (identifier, team id, Apple platform binary), embedded Info.plist, engine, Go version, Homebrew/Nix package, Chromium helper type, interpreter script name, TLS libraries mapped and linked, responsible pid; on Windows also the version resource, subsystem (gui, console), MSIX/Scoop package and the services a svchost runs |
+| `process` | first time a process is seen | pid, start time, executable, bundle chain (id, name, version of each `.app`/`.framework`/`.xpc`), code signature (identifier, team id, Apple platform binary), embedded Info.plist, engine, Go version, Homebrew/Nix package, Chromium helper type, interpreter script name, TLS libraries mapped and linked, responsible pid; on Windows also the version resource, subsystem (gui, console), MSIX/Scoop package, the publisher (as `signing.team_id`) and the services a svchost runs |
 | `hello` | each ClientHello | time, transport (tcp, quic, dtls), QUIC version, addresses, interface, service class, SNI, ALPN, ECH, `ja4`, `ja4_r`, `ja4_o`, `ja4_ro`, `ja3`, `ja3_r`, the socket's process (`proc`, `helper`, `stacks`), effective (`eproc`) and responsible (`resp`) processes, and `app` |
 | `domain` | every 5 minutes (`--flush-every`) and at exit, for each (process, name) that changed | credited process and app, name, `via` (sni, dns, dns-query, http), cumulative count, first and last time, ports, JA4s |
 | `stats` | every 5 minutes and at exit | packets, ClientHellos per transport, failures, libpcap drops |
@@ -273,6 +273,29 @@ cargo build --release -p peersig-probe
   Chromium browsers are (a version directory with `chrome.dll` or
   `msedge.dll`) is a browser even when it is not listed, so that its names
   are never collected.
+- **Publisher.** `team_id` holds the publisher, where macOS has the
+  signing team: for a Store app, the organization (`O=`) of its package
+  manifest's `Publisher`, which Windows checks against the package's
+  signature at install, or the `PublisherDisplayName` when the Store
+  signed the package (WhatsApp Inc.); for any other executable, the
+  organization of its signer as `WinVerifyTrust` verifies it, from the
+  signature in the file or, for Windows' own files, from the catalog that
+  lists them (Microsoft Corporation for `svchost.exe`). No revocation
+  check and no download (`WTD_CACHE_ONLY_URL_RETRIEVAL`). Unsigned
+  executables, and signatures Windows does not trust, have none; the
+  version resource's `CompanyName` is not used, anyone can write it.
+- **BITS.** The Background Intelligent Transfer Service downloads for
+  other programs (Dell's updater, Edge's component updater, OneDrive's),
+  from a svchost. The capture session also enables
+  Microsoft-Windows-Bits-Client, whose events say which program created
+  each job (3, or 16403 for a job created before the probe started) and
+  which URL each transfer fetches (59, 60, 61; 4 and 5 end the job). A
+  ClientHello from the BITS service to a host that a job transferring
+  then, or in the last two minutes, downloads from is credited to the
+  job's creator: it is the hello's `eproc`, and `app.via` is `bits`. A
+  host no job names (a redirect: g.live.com sends OneDrive's download on
+  to oneclient.sfx.ms) goes to the creator of the jobs transferring right
+  then. Two programs, or a job whose creator is unknown, leave it to BITS.
 - **Who it works for.** A WebView2 process (`msedgewebview2.exe`) works for
   the app that started it, through the parent chain: Teams, Outlook,
   WhatsApp. A Chromium or Electron child works for its browser process
@@ -296,9 +319,9 @@ cargo build --release -p peersig-probe
   ClientHellos (TCP and QUIC: Spotify, Firefox, VS Code, OneDrive,
   PowerShell...); 17 were attributed, the others came from processes that
   had already exited (curl). Its pcapng gives the same 20 with `read`.
-- Not done: the code-signing publisher (Authenticode) as `team_id`; the
-  per-packet process (the ETW kernel network events), which would also
-  give DNS and HTTP names (they need per-packet metadata, as on Linux).
+- Not done: the per-packet process (the ETW kernel network events), which
+  would also give DNS and HTTP names (they need per-packet metadata, as on
+  Linux); who Delivery Optimization (`DoSvc`) downloads for.
 
 `data/apps.toml` (browser bundle ids and executable names, stack libraries,
 resolver processes) is compiled in; bump its `version` on every change.

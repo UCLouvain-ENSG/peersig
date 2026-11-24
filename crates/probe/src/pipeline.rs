@@ -248,6 +248,7 @@ impl Pipeline {
 
     fn hello(&mut self, h: Hello) {
         let att = self.resolver.attribute(h.meta.as_ref(), &h.key);
+        let att = self.resolver.bits_delegate(att, h.ch.sni.as_deref(), h.ts);
         self.note_processes(&att);
         let fp = fingerprint::compute(&h.ch, h.transport);
         let ts = ts_string(h.ts);

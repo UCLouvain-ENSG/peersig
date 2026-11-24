@@ -34,8 +34,9 @@ Items (`crates/proto/src/item.rs`), at most once per item and week:
 - `hello`: the system and its major version (`macos 27`, `windows 11`,
   `android 15`; on Linux the distribution's, `linux ubuntu 24`), transport
   (tcp, quic, dtls), JA4, and the application: name, bundle id (package
-  name on Android), version, code-signing team, kind (browser, app,
-  system, cli), engine. Android items have no team or engine.
+  name on Android), version, code-signing team (on Windows, the
+  publisher), kind (browser, app, system, cli), engine. Android items have
+  no team or engine.
 - `domain` (opt-in): the same application fields without version, a server
   name it put in a ClientHello (SNI), and the JA4 of that ClientHello: what
   anyone on the network path sees together. Never for browsers. Only SNI:
@@ -269,7 +270,14 @@ computer.
   named by its executable's version resource (product name and version),
   an MSIX app by its package, a Windows service host by its service name.
   These are the same fields as on macOS (`name`, `id`, `version`, `kind`,
-  `engine`); `team_id` stays empty.
+  `engine`). `team_id` holds the publisher (Microsoft Corporation, Dell
+  Technologies Inc.), only from a signature Windows verifies, or from a
+  Store package's manifest, which Windows checked at install: an
+  unsigned program has none. A program signed with an organization's own
+  certificate that its computers trust is named by that organization, as
+  an in-house Mac app is by its team. Downloads that the BITS service
+  makes for a program are credited to that program (Windows logs which
+  program created each download job), not to BITS.
 - **Android.** The capture is a VPN that goes nowhere: it ends each
   connection on the phone and opens the same one from the app, unchanged,
   so it sees all the phone's traffic, as the probe sees a computer's. It

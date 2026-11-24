@@ -15,6 +15,6 @@ Check downloads against `SHA256SUMS`.
 
 ## What PeerSig sends
 
-Once a week, after a day for you to review it: which applications (name, bundle id, version, signing team, kind, engine) sent which TLS fingerprint (JA4) on which system and major version, and, if you allow it, the server names (SNI) non-browser applications connected to, as anonymous ballots. Builds of one version line go as one (`2.1.*`). Never addresses, sites visited, times, paths or names. See `docs/privacy.md`.
+Once a week, after a day for you to review it: which applications (name, bundle id, version, signing team or publisher, kind, engine) sent which TLS fingerprint (JA4) on which system and major version, and, if you allow it, the server names (SNI) non-browser applications connected to, as anonymous ballots. Builds of one version line go as one (`2.1.*`). Never addresses, sites visited, times, paths or names. See `docs/privacy.md`.
 
 Dedicated observers (machines run for the study, on any system, with an `OBS-` code from the study team) report daily instead, not anonymously, and are published without threshold: see `docs/observers.md`.

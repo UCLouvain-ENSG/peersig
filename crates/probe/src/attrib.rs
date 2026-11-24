@@ -16,7 +16,10 @@
 //! On Windows, `resp` is the app a WebView2 process works for, or the
 //! browser process of a Chromium or Electron child; the app is named by its
 //! executable's version resource, and a svchost process by the services it
-//! runs.
+//! runs. A download the BITS service makes for a program has that program
+//! as `eproc` (`crate::bits`). The publisher takes the signing team's place
+//! (`team_id`): a Store app's package publisher, else the signer of the
+//! executable as Windows verifies it (`platform::publisher`).
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -381,10 +384,20 @@ impl Resolver {
         if let Some(pk) = package.as_mut().filter(|pk| pk.manager == "msix") {
             pk.display_name = bundle::msix_display_name(path);
         }
+        // Windows: the publisher stands where macOS has the signing team,
+        // from the package of a Store app, else from the file's signature.
+        #[cfg(windows)]
+        let signing = bin.signing.or_else(|| {
+            let msix = package.as_ref().is_some_and(|pk| pk.manager == "msix");
+            let publisher = if msix { bundle::msix_publisher(path) } else { None }.or_else(|| platform::publisher(path));
+            publisher.map(|p| Signing { team_id: Some(p), ..Default::default() })
+        });
+        #[cfg(not(windows))]
+        let signing = bin.signing;
         let e = Arc::new(ExeInfo {
             path: path.to_string(),
             uuid: bin.uuid,
-            signing: bin.signing,
+            signing,
             bundles,
             embedded,
             engine,
@@ -544,10 +557,38 @@ impl Resolver {
             }
             _ => ("none", None, None),
         };
+        let via = if eproc.is_some() { "delegated" } else { "self" };
+        self.credit(source, proc, eproc, via)
+    }
+
+    /// Windows: a ClientHello from the BITS service, to a host that one of
+    /// its jobs is downloading from, is credited to the program that
+    /// created the job (`crate::bits`), as a delegated socket is: the BITS
+    /// service stays `proc`, that program becomes `eproc`.
+    pub fn bits_delegate(&mut self, att: Attribution, sni: Option<&str>, ts: f64) -> Attribution {
+        let from_bits = att.eproc.is_none()
+            && att.proc.as_ref().is_some_and(|p| p.services.iter().any(|s| s.eq_ignore_ascii_case("BITS")));
+        let (true, Some(host)) = (from_bits, sni) else { return att };
+        let Some((path, pid)) = crate::bits::JOBS.lock().ok().and_then(|mut j| j.creator(host, ts)) else { return att };
+        let pid = pid as i32;
+        // The creator itself while it runs (that pid, that executable), else
+        // its executable alone.
+        let creator = self.process(pid).filter(|p| p.exe.as_ref().is_some_and(|e| e.path.eq_ignore_ascii_case(&path)));
+        let creator = creator.unwrap_or_else(|| {
+            let mut stub = Process::stub(format!("{}@?", pid), pid, &base_name(&path));
+            stub.exe = Some(self.exe(&path));
+            Arc::new(stub)
+        });
+        self.credit(att.source, att.proc, Some(creator), "bits")
+    }
+
+    /// The process credited with the traffic (the delegating one, then the
+    /// app it works for), and its app.
+    fn credit(&mut self, source: &'static str, proc: Option<Arc<Process>>, eproc: Option<Arc<Process>>, via: &str) -> Attribution {
         let origin = eproc.clone().or_else(|| proc.clone());
         let mut resp = None;
         let mut credited = origin.clone();
-        let mut via = if eproc.is_some() { "delegated".to_string() } else { "self".to_string() };
+        let mut via = via.to_string();
         if let Some(o) = &origin {
             if let Some(r) = o.responsible.and_then(|r| self.process(r)) {
                 if works_for(o, &r) {

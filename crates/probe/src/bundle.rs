@@ -209,25 +209,95 @@ pub struct Package {
     pub display_name: Option<String>,
 }
 
-/// The `<DisplayName>` of an MSIX package's manifest (`WindowsApps\<full
-/// name>\AppxManifest.xml`), unless it points to a translated resource.
-pub fn msix_display_name(exe_path: &str) -> Option<String> {
+/// The manifest of the MSIX package an executable belongs to
+/// (`WindowsApps\<full name>\AppxManifest.xml`).
+fn msix_manifest(exe_path: &str) -> Option<String> {
     const DIR: &str = "\\windowsapps\\";
     let i = exe_path.to_ascii_lowercase().find(DIR)? + DIR.len();
     let pkg = exe_path[i..].split('\\').next()?;
-    let manifest = Path::new(&exe_path[..i]).join(pkg).join("AppxManifest.xml");
-    let xml = std::fs::read_to_string(manifest).ok()?;
+    std::fs::read_to_string(Path::new(&exe_path[..i]).join(pkg).join("AppxManifest.xml")).ok()
+}
+
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+}
+
+/// The text of `<tag>` in a manifest's `<Properties>`, unless it points to
+/// a translated resource.
+fn msix_property(xml: &str, tag: &str) -> Option<String> {
     let props = &xml[xml.find("<Properties>")?..];
-    let s = props.find("<DisplayName>")? + "<DisplayName>".len();
-    let e = s + props[s..].find("</DisplayName>")?;
-    let name = props[s..e]
-        .trim()
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'");
-    (!name.is_empty() && !name.starts_with("ms-resource:") && name.chars().count() <= 128).then_some(name)
+    let open = format!("<{}>", tag);
+    let s = props.find(&open)? + open.len();
+    let e = s + props[s..].find(&format!("</{}>", tag))?;
+    let v = xml_unescape(props[s..e].trim());
+    (!v.is_empty() && !v.starts_with("ms-resource:") && v.chars().count() <= 128).then_some(v)
+}
+
+/// The `<DisplayName>` of an MSIX package's manifest.
+pub fn msix_display_name(exe_path: &str) -> Option<String> {
+    msix_property(&msix_manifest(exe_path)?, "DisplayName")
+}
+
+/// An MSIX package's publisher. A package is signed as a whole, not its
+/// executables: the organization (O) of the `Publisher` in its manifest's
+/// `<Identity>`, which Windows checks against the package's signature when
+/// it installs it; else, for packages the Store signed (their publisher is
+/// a bare id, `CN=24803D75-212C-...`), the `<PublisherDisplayName>` that
+/// the Store shows ("WhatsApp Inc.").
+pub fn msix_publisher(exe_path: &str) -> Option<String> {
+    msix_publisher_of(&msix_manifest(exe_path)?)
+}
+
+fn msix_publisher_of(xml: &str) -> Option<String> {
+    let identity = &xml[xml.find("<Identity")?..];
+    let identity = &identity[..identity.find('>')?];
+    attribute(identity, "Publisher")
+        .and_then(|dn| dn_value(&xml_unescape(&dn), "O"))
+        .filter(|o| o.chars().count() <= 128)
+        .or_else(|| msix_property(xml, "PublisherDisplayName"))
+}
+
+/// The value of attribute `name` in an XML start tag.
+fn attribute(tag: &str, name: &str) -> Option<String> {
+    let mut at = 0;
+    while let Some(i) = tag[at..].find(name).map(|i| at + i) {
+        at = i + name.len();
+        if !tag[..i].ends_with(char::is_whitespace) {
+            continue;
+        }
+        let Some(v) = tag[at..].trim_start().strip_prefix('=') else { continue };
+        let v = v.trim_start();
+        let q = v.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        return Some(v[1..1 + v[1..].find(q)?].to_string());
+    }
+    None
+}
+
+/// The value of `key` in a distinguished name
+/// (`CN="Anthropic, PBC", O="Anthropic, PBC", L=San Francisco`).
+fn dn_value(dn: &str, key: &str) -> Option<String> {
+    let (mut parts, mut cur, mut quoted) = (Vec::new(), String::new(), false);
+    for c in dn.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                cur.push(c);
+            }
+            ',' | ';' if !quoted => parts.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    parts.push(cur);
+    parts.iter().find_map(|p| {
+        let (k, v) = p.split_once('=')?;
+        if !k.trim().eq_ignore_ascii_case(key) {
+            return None;
+        }
+        let v = v.trim();
+        let v = v.strip_prefix('"').and_then(|x| x.strip_suffix('"')).map(|x| x.replace("\"\"", "\"")).unwrap_or_else(|| v.to_string());
+        let v = v.trim().to_string();
+        (!v.is_empty()).then_some(v)
+    })
 }
 
 pub fn package_of(path: &str) -> Option<Package> {
@@ -373,6 +443,30 @@ mod tests {
         let p = package_of(r"C:\Users\x\scoop\apps\curl\8.11.0_1\bin\curl.exe").unwrap();
         assert_eq!((p.manager.as_str(), p.name.as_str(), p.version.as_deref()), ("scoop", "curl", Some("8.11.0_1")));
         assert!(package_of(r"C:\Program Files\Google\Chrome\Application\chrome.exe").is_none());
+    }
+
+    /// Publishers as Windows 11 manifests give them.
+    #[test]
+    fn msix_publishers() {
+        let m = |publisher: &str, display: &str| {
+            format!(
+                "<?xml version=\"1.0\"?>\n<Package>\n  <Identity Name=\"X\"\n    Publisher=\"{}\" Version=\"1.0.0.0\" />\n  <Properties>\n    <DisplayName>X</DisplayName>\n    <PublisherDisplayName>{}</PublisherDisplayName>\n  </Properties>\n</Package>",
+                publisher, display
+            )
+        };
+        let teams = m("CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US", "Microsoft");
+        assert_eq!(msix_publisher_of(&teams).as_deref(), Some("Microsoft Corporation"));
+        let claude = m(
+            "CN=&quot;Anthropic, PBC&quot;, O=&quot;Anthropic, PBC&quot;, L=San Francisco, S=California, C=US, SERIALNUMBER=4860621, OID.2.5.4.15=Private Organization",
+            "Anthropic, PBC",
+        );
+        assert_eq!(msix_publisher_of(&claude).as_deref(), Some("Anthropic, PBC"));
+        // Signed by the Store: the publisher is an id, the Store's name stands.
+        let whatsapp = m("CN=24803D75-212C-471A-BC57-9EF86AB91435", "WhatsApp Inc.");
+        assert_eq!(msix_publisher_of(&whatsapp).as_deref(), Some("WhatsApp Inc."));
+        assert_eq!(msix_publisher_of(&m("CN=24803D75", "ms-resource:PublisherName")), None);
+        assert_eq!(dn_value(r#"CN="a ""b"", c", O=x"#, "CN").as_deref(), Some(r#"a "b", c"#));
+        assert_eq!(dn_value("OID.2.5.4.15=Private Organization, O=", "O"), None);
     }
 
     /// Install layouts, made in a temporary directory.

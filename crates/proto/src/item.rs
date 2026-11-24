@@ -30,6 +30,7 @@ pub struct AppRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Code-signing team (macOS): the vendor, e.g. UBF8T346G9 for Microsoft.
+    /// On Windows, the publisher its signature names (Microsoft Corporation).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team_id: Option<String>,
     /// browser, app, system or cli.

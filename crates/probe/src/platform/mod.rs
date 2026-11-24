@@ -95,6 +95,10 @@ pub use linux::*;
 mod windows;
 #[cfg(windows)]
 pub use windows::*;
+#[cfg(windows)]
+mod signer;
+#[cfg(windows)]
+pub use signer::publisher;
 
 #[cfg(target_os = "android")]
 mod android;

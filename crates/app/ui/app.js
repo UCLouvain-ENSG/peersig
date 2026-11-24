@@ -50,7 +50,7 @@ function isObserverCode(s) {
 const android = () => !!state && state.os === "android";
 const device = () => (android() ? "phone" : "computer");
 // What an item names of an application (Android has no signing team or engine).
-const appFields = () => (android() ? "name, package name, version, kind" : "name, bundle id, version, signing team, kind, engine");
+const appFields = () => (android() ? "name, package name, version, kind" : "name, bundle id, version, signing team or publisher, kind, engine");
 function hours(sec) {
   if (sec <= 0) return "now";
   const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
@@ -143,7 +143,7 @@ function renderEnroll() {
     el("h2", {}, "Join the study"),
     el("p", {}, `PeerSig watches the start of the encrypted connections this ${device()} makes (the TLS “ClientHello”), notes which application made each one, and once a week contributes that list to a research study.`),
     android() ? el("p", {}, "On a phone, PeerSig sees other apps' connections through a VPN of its own. That VPN stays on the phone: it forwards every connection, unchanged, to where it was going, and only looks at the start of encrypted connections. No VPN server is involved, and PeerSig's own traffic does not go through it.") : null,
-    el("p", {}, `What it sends: the applications (${android() ? appFields() : "name, bundle id, version, signing team, kind, browser engine"}), the fingerprint (JA4) of their handshakes, and the system with its major version (${android() ? "Android 15" : "macOS 27, Ubuntu 24"}); if you choose, the server names non-browser applications connect to. Builds of one version line are merged first (2.1.322 and 2.1.326 go as 2.1.*). Never: addresses, the sites you visit, times, file paths or your name. Each item travels as a separate anonymous ballot that the server cannot tie to you or to your other items. Each week you get a day to look at the list and remove anything before it is sent.`),
+    el("p", {}, `What it sends: the applications (${android() ? appFields() : "name, bundle id, version, signing team or publisher, kind, browser engine"}), the fingerprint (JA4) of their handshakes, and the system with its major version (${android() ? "Android 15" : "macOS 27, Ubuntu 24"}); if you choose, the server names non-browser applications connect to. Builds of one version line are merged first (2.1.322 and 2.1.326 go as 2.1.*). Never: addresses, the sites you visit, times, file paths or your name. Each item travels as a separate anonymous ballot that the server cannot tie to you or to your other items. Each week you get a day to look at the list and remove anything before it is sent.`),
     el("label", { class: "field" }, el("span", {}, "Collection server"), server),
     el("label", { class: "field" }, el("span", {}, "Relay (hides your address from the server)"), relay),
     el("label", { class: "field" }, el("span", {}, "Enrollment code"), code),
@@ -359,7 +359,7 @@ function itemRow(o, showFlags) {
     el("td", {}, el("div", {}, app.name, app.version ? el("span", { class: "muted" }, " " + app.version) : null,
         o.merged ? el("span", { class: "muted small", title: o.merged.join("\n") }, ` · ${o.merged.length} merged`) : null),
       el("span", { class: "chip" }, app.kind || ""), app.engine ? el("span", { class: "muted small" }, " " + app.engine) : null,
-      app.id || app.team_id ? el("div", { class: "mono muted small" }, [app.id, app.team_id ? `team ${app.team_id}` : null].filter(Boolean).join(" · ")) : null,
+      app.id || app.team_id ? el("div", { class: "mono muted small" }, [app.id, app.team_id ? `${state.os === "windows" ? "publisher" : "team"} ${app.team_id}` : null].filter(Boolean).join(" · ")) : null,
       showFlags ? el("div", {}, ...flagChips(o)) : null),
     el("td", {}, ...describe(it)),
     el("td", { class: "muted" }, o.count.toLocaleString()),
@@ -461,7 +461,7 @@ function renderItems() {
     el("h3", {}, `Everything else, by application (${count(rest.length, "item")})`),
     el("p", { class: "muted small" }, "Untick an application to leave all its items out, or open it to choose."),
     el("div", {}, apps.map((a) => appGroup(a, byApp.get(a), !!q && apps.length <= 20))),
-    el("p", { class: "muted small" }, `¹ Stays on this ${device()}: how often, and which ${android() ? "apps" : "processes"}. Everything else in a ticked row is sent, as shown: the application (${android() ? appFields() : "name, version, kind, engine, bundle id, signing team"}), the transport and fingerprint, and the server name of a “connection to” row (those carry no version). Each item also gives the system and its major version${os ? ` (${os})` : ""}. Once per ${unit()}, however often it was seen.`),
+    el("p", { class: "muted small" }, `¹ Stays on this ${device()}: how often, and which ${android() ? "apps" : "processes"}. Everything else in a ticked row is sent, as shown: the application (${android() ? appFields() : "name, version, kind, engine, bundle id, signing team or publisher"}), the transport and fingerprint, and the server name of a “connection to” row (those carry no version). Each item also gives the system and its major version${os ? ` (${os})` : ""}. Once per ${unit()}, however often it was seen.`),
     el("p", { class: "muted small" },
       `Not collected: ${sk.unattributed} handshakes with no known application; ${sk.browser_domains} names contacted by browsers (browsing history is never collected)` +
       (state.settings.share_domains ? `; ${sk.private_domains} local or private names; ${sk.not_sni} names seen only in DNS or plain HTTP.` : `; ${sk.domains_off} server names (sharing is off).`)),

@@ -15,6 +15,12 @@
 //! address are left out: a network card under a Hyper-V switch carries the
 //! same packets as the switch's virtual adapter, which has the address.
 //! Loopback traffic does not go through NDIS and is not seen.
+//!
+//! The session also enables Microsoft-Windows-Bits-Client: which program
+//! created each BITS job and which URLs its transfers fetch (`crate::bits`),
+//! so that a download the BITS service makes for a program is credited to
+//! that program. Its fields are read by name (TDH), as the event log shows
+//! them.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -33,10 +39,11 @@ use windows_sys::Win32::NetworkManagement::IpHelper::{
 };
 use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
 use windows_sys::Win32::System::Diagnostics::Etw::{
-    CloseTrace, ControlTraceW, EnableTraceEx2, OpenTraceW, ProcessTrace, QueryAllTracesW, StartTraceW, CONTROLTRACE_HANDLE,
-    EVENT_CONTROL_CODE_ENABLE_PROVIDER, EVENT_RECORD, EVENT_TRACE_CONTROL_QUERY, EVENT_TRACE_CONTROL_STOP,
-    EVENT_TRACE_LOGFILEW, EVENT_TRACE_PROPERTIES, EVENT_TRACE_REAL_TIME_MODE, PROCESSTRACE_HANDLE,
-    PROCESS_TRACE_MODE_EVENT_RECORD, PROCESS_TRACE_MODE_REAL_TIME, WNODE_FLAG_TRACED_GUID,
+    CloseTrace, ControlTraceW, EnableTraceEx2, OpenTraceW, ProcessTrace, QueryAllTracesW, StartTraceW, TdhGetProperty,
+    TdhGetPropertySize, CONTROLTRACE_HANDLE, EVENT_CONTROL_CODE_ENABLE_PROVIDER, EVENT_RECORD, EVENT_TRACE_CONTROL_QUERY,
+    EVENT_TRACE_CONTROL_STOP, EVENT_TRACE_LOGFILEW, EVENT_TRACE_PROPERTIES, EVENT_TRACE_REAL_TIME_MODE,
+    PROCESSTRACE_HANDLE, PROCESS_TRACE_MODE_EVENT_RECORD, PROCESS_TRACE_MODE_REAL_TIME, PROPERTY_DATA_DESCRIPTOR,
+    WNODE_FLAG_TRACED_GUID,
 };
 
 use super::file::Writer;
@@ -55,6 +62,21 @@ const KW_START: u64 = 0x4000_0000;
 const KW_END: u64 = 0x8000_0000;
 const KW_SEND: u64 = 0x1_0000_0000;
 const TRACE_LEVEL_VERBOSE: u8 = 5;
+
+/// Microsoft-Windows-Bits-Client.
+const BITS_PROVIDER: GUID = GUID::from_u128(0xef1cc15b_46c1_414e_bb95_e76b077bd51e);
+/// Its operational channel's events: 3 job created (jobId, processPath,
+/// processId), 16403 file added (jobId, RemoteName, processId), 59 and
+/// 60/61 transfer started and stopped (Id, url), 4 and 5 job completed and
+/// cancelled (jobId).
+const BITS_JOB_CREATED: u16 = 3;
+const BITS_JOB_COMPLETED: u16 = 4;
+const BITS_JOB_CANCELLED: u16 = 5;
+const BITS_TRANSFER_STARTED: u16 = 59;
+const BITS_TRANSFER_STOPPED: u16 = 60;
+const BITS_TRANSFER_FAILED: u16 = 61;
+const BITS_FILE_ADDED: u16 = 16403;
+const TRACE_LEVEL_INFORMATION: u8 = 4;
 
 const SESSION_PREFIX: &str = "PeerSig Capture";
 /// Link types: Ethernet (wired, and Wi-Fi adapters that present themselves
@@ -196,9 +218,72 @@ fn unix_time(ft: i64) -> f64 {
     (ft - 116_444_736_000_000_000) as f64 / 1e7
 }
 
+/// A property of an event, by name, as raw bytes.
+fn property(rec: &EVENT_RECORD, name: &str) -> Option<Vec<u8>> {
+    let w = wide(name);
+    let desc = PROPERTY_DATA_DESCRIPTOR { PropertyName: w.as_ptr() as u64, ArrayIndex: u32::MAX, Reserved: 0 };
+    let mut size = 0u32;
+    if unsafe { TdhGetPropertySize(rec, 0, null(), 1, &desc, &mut size) } != NO_ERROR || size == 0 || size > 64 * 1024 {
+        return None;
+    }
+    let mut buf = vec![0u8; size as usize];
+    (unsafe { TdhGetProperty(rec, 0, null(), 1, &desc, size, buf.as_mut_ptr()) } == NO_ERROR).then_some(buf)
+}
+
+fn string_property(rec: &EVENT_RECORD, name: &str) -> Option<String> {
+    let b = property(rec, name)?;
+    let w: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
+    Some(String::from_utf16_lossy(&w))
+}
+
+fn guid_property(rec: &EVENT_RECORD, name: &str) -> Option<u128> {
+    property(rec, name)?.get(..16)?.try_into().ok().map(u128::from_le_bytes)
+}
+
+fn u32_property(rec: &EVENT_RECORD, name: &str) -> Option<u32> {
+    property(rec, name)?.get(..4)?.try_into().ok().map(u32::from_le_bytes)
+}
+
+/// A BITS event: what the job tracker needs from it.
+fn on_bits_event(rec: &EVENT_RECORD) {
+    let t = unix_time(rec.EventHeader.TimeStamp);
+    let id = |name: &str| guid_property(rec, name);
+    match rec.EventHeader.EventDescriptor.Id {
+        BITS_JOB_CREATED => {
+            let (Some(job), Some(path)) = (id("jobId"), string_property(rec, "processPath")) else { return };
+            let pid = u32_property(rec, "processId").unwrap_or(0);
+            crate::bits::JOBS.lock().map(|mut j| j.created(job, &path, pid, t)).ok();
+        }
+        BITS_FILE_ADDED => {
+            let (Some(job), Some(url)) = (id("jobId"), string_property(rec, "RemoteName")) else { return };
+            // The process adding the file, while it is there to ask.
+            let adder = u32_property(rec, "processId")
+                .and_then(|pid| crate::platform::exe_path(pid as i32).map(|path| (path, pid)));
+            crate::bits::JOBS.lock().map(|mut j| j.file_added(job, &url, adder, t)).ok();
+        }
+        BITS_TRANSFER_STARTED | BITS_TRANSFER_STOPPED | BITS_TRANSFER_FAILED => {
+            let (Some(job), Some(url)) = (id("Id"), string_property(rec, "url")) else { return };
+            let started = rec.EventHeader.EventDescriptor.Id == BITS_TRANSFER_STARTED;
+            crate::bits::JOBS
+                .lock()
+                .map(|mut j| if started { j.transfer_started(job, &url, t) } else { j.transfer_stopped(job, &url, t) })
+                .ok();
+        }
+        BITS_JOB_COMPLETED | BITS_JOB_CANCELLED => {
+            let Some(job) = id("jobId") else { return };
+            crate::bits::JOBS.lock().map(|mut j| j.ended(job, t)).ok();
+        }
+        _ => {}
+    }
+}
+
 unsafe extern "system" fn on_event(rec: *mut EVENT_RECORD) {
     let rec = unsafe { &*rec };
     let h = &rec.EventHeader;
+    if guid_eq(&h.ProviderId, &BITS_PROVIDER) {
+        on_bits_event(rec);
+        return;
+    }
     if h.EventDescriptor.Id != EVENT_FRAGMENT || !guid_eq(&h.ProviderId, &PROVIDER) || rec.UserContext.is_null() {
         return;
     }
@@ -300,6 +385,13 @@ impl Live {
         if r != NO_ERROR {
             stop_session(&name);
             bail!("enabling the NDIS packet capture: {}", std::io::Error::from_raw_os_error(r as i32));
+        }
+        // BITS jobs, for its downloads' programs: capture works without.
+        let r = unsafe {
+            EnableTraceEx2(handle, &BITS_PROVIDER, EVENT_CONTROL_CODE_ENABLE_PROVIDER, TRACE_LEVEL_INFORMATION, u64::MAX, 0, 0, null())
+        };
+        if r != NO_ERROR {
+            eprintln!("warning: BITS events unavailable ({}): its downloads stay credited to BITS", std::io::Error::from_raw_os_error(r as i32));
         }
         let (tx, rx) = sync_channel::<Packet>(65_536);
         let received = Arc::new(AtomicU64::new(0));
