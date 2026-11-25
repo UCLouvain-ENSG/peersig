@@ -425,7 +425,7 @@ impl Resolver {
             }
         }
         self.lookups += 1;
-        let path = platform::exe_path(pid);
+        let path = basic.exe.clone().or_else(|| platform::exe_path(pid));
         let exe = path.as_deref().map(|p| self.exe(p));
         let args = platform::args(pid).unwrap_or_default();
         let helper = chromium_helper(&args);
@@ -661,7 +661,8 @@ impl Resolver {
             || service.is_some()
             // Windows components outside %SystemRoot% (Defender's platform
             // in ProgramData). The product name is not signed: a label only.
-            || vinfo.is_some_and(|v| v.is_os_component());
+            || vinfo.is_some_and(|v| v.is_os_component())
+            || is_windows_kernel(p);
         // Windows has no bundles: a GUI executable is an app.
         let gui = exe.and_then(|e| e.subsystem.as_deref()) == Some("gui");
         let kind = if browser.is_some() {
@@ -701,6 +702,13 @@ fn unlisted_chromium_browser(exe: Option<&ExeInfo>) -> Option<String> {
     let en = e.engine.as_ref()?;
     let browser_layout = en.name == "chromium" && en.via.ends_with(".dll");
     (browser_layout && !e.file_name().eq_ignore_ascii_case("msedgewebview2.exe")).then(|| "chromium".to_string())
+}
+
+/// Windows: the kernel's own process, "System" (pid 4), which has no
+/// executable. It owns the sockets of what runs in the kernel: SMB over
+/// QUIC to a mapped drive, among others.
+fn is_windows_kernel(p: &Process) -> bool {
+    cfg!(windows) && p.pid == 4 && p.exe.is_none()
 }
 
 /// Windows: a file under %SystemRoot%.
@@ -864,6 +872,12 @@ mod tests {
     fn windows_apps() {
         let r = Resolver::new(false);
         let app = |p: &Process| r.app_of(Some(p), None, "self".into());
+        // The kernel (SMB over QUIC): no executable, but no stranger.
+        let kernel = Process::stub("4@0".into(), 4, "System");
+        if cfg!(windows) {
+            let a = app(&kernel);
+            assert_eq!((a.name.as_str(), a.kind.as_str()), ("System", "system"));
+        }
         let os = Some("Microsoft® Windows® Operating System");
         let a = app(&process(exe(r"C:\Windows\System32\svchost.exe", os, "10.0.26100.1", false), &["wuauserv"]));
         assert_eq!((a.name.as_str(), a.kind.as_str(), a.version.as_deref()), ("wuauserv", "system", Some("10.0.26100.1")));

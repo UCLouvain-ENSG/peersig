@@ -19,6 +19,10 @@ pub struct PidBasic {
     /// process identity: pids are reused).
     pub start_us: u64,
     pub name: String,
+    /// The executable's path, when the query that named the process read
+    /// it (Windows): a process that exits right after its ClientHello is
+    /// gone by the time a second query would ask.
+    pub exe: Option<String>,
 }
 
 /// An IPv4 address seen through a dual-stack socket (`::ffff:192.0.2.1`)

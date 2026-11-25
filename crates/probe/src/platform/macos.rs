@@ -26,6 +26,7 @@ pub fn basic(pid: i32) -> Option<PidBasic> {
         uid: Some(info.pbi_uid),
         start_us: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
         name: if name.is_empty() { comm } else { name },
+        exe: None,
     })
 }
 

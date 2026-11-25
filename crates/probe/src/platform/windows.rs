@@ -155,14 +155,15 @@ pub fn basic(pid: i32) -> Option<PidBasic> {
     }
     if let Some(h) = open(pid) {
         if let Some(start_us) = start_us(&h) {
-            let name = image_path(&h).map(|p| file_name(&p)).or_else(|| snapshot_entry(pid).map(|e| e.name)).unwrap_or_default();
-            return Some(PidBasic { ppid: parent_pid(&h).unwrap_or(0), uid: None, start_us, name });
+            let exe = image_path(&h);
+            let name = exe.as_deref().map(file_name).or_else(|| snapshot_entry(pid).map(|e| e.name)).unwrap_or_default();
+            return Some(PidBasic { ppid: parent_pid(&h).unwrap_or(0), uid: None, start_us, name, exe });
         }
     }
     // Another account's process, without the rights to open it: the
     // snapshot still names it. Its start time is unknown (0).
     let e = snapshot_entry(pid)?;
-    Some(PidBasic { ppid: e.ppid, uid: None, start_us: 0, name: e.name })
+    Some(PidBasic { ppid: e.ppid, uid: None, start_us: 0, name: e.name, exe: None })
 }
 
 pub fn exe_path(pid: i32) -> Option<String> {
@@ -662,6 +663,8 @@ mod tests {
         let b = basic(me).unwrap();
         assert!(b.start_us > 1_600_000_000_000_000);
         assert!(b.name.to_ascii_lowercase().ends_with(".exe"));
+        // The path comes with the name, from the same query.
+        assert_eq!(b.exe.as_deref().map(file_name), Some(b.name.clone()));
         // The image path has junctions resolved: compare the file names.
         let exe = exe_path(me).unwrap();
         let cur = std::env::current_exe().unwrap();

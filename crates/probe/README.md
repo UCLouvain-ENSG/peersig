@@ -267,8 +267,11 @@ cargo build --release -p peersig-probe
   package manifest and versioned by its package; its family name
   (`MSTeams_8wekyb3d8bbwe`) is its `id`. A svchost process is named by the
   service it runs (`wuauserv`, `BITS`, `DoSvc`), from the service manager.
-  `kind` is `system` under `%SystemRoot%` and for Windows components,
-  `app` for a GUI executable, `cli` for a console one. Browsers are matched
+  `kind` is `system` under `%SystemRoot%`, for Windows components, and for
+  the kernel ("System", pid 4, which owns the sockets of SMB over QUIC to
+  a mapped drive), `app` for a GUI executable, `cli` for a console one.
+  The executable's path is read with the process's name, in one query: a
+  process that exits right after its ClientHello is still named. Browsers are matched
   by executable name (`data/apps.toml`); an executable installed the way
   Chromium browsers are (a version directory with `chrome.dll` or
   `msedge.dll`) is a browser even when it is not listed, so that its names

@@ -31,6 +31,7 @@ pub fn basic(pid: i32) -> Option<PidBasic> {
         uid: Some(uid),
         start_us: btime * 1_000_000 + start_ticks * 1_000_000 / ticks,
         name,
+        exe: None,
     })
 }
 
