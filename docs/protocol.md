@@ -53,7 +53,11 @@ A code is 60 random bits (`K7QF-2M9D-XW4P`); the server stores
   no per-identity limit applies.
 
 The server stores `HMAC-SHA256(enroll-key, kind ":" identity)` with a count,
-and refuses a code when the count reaches `--codes-per-identity`. Labels
+and refuses a code when the count reaches `--codes-per-identity`. Each week
+(from Monday, UTC) every count drops by one, all at once, and rows that
+reach zero are deleted: an identity gets that many codes at once, then one
+more a week (a lost code, a new device). The table keeps one week number in
+all, not one per identity, so it does not say when an identity got codes. Labels
 are `M<n>` (e-mail), `G<n>` (GitHub) and `N<n>` (network). The page hands out at most
 `--enroll-per-hour` codes per hour, and one message per address every ten
 minutes; it answers the same whether or not an address had codes already.

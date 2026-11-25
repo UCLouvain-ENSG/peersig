@@ -10,7 +10,7 @@
 </section>
 
 <div class="policy">
-  <p class="updated">Last updated: 24 November 2026.</p>
+  <p class="updated">Last updated: 25 November 2026.</p>
 
   <p>This policy covers the PeerSig apps (for macOS, Windows, Linux and Android, and the <code>peersig-headless</code> package for servers), this website, and the collection server and relay behind them.</p>
 
@@ -56,7 +56,7 @@
   <h2>Getting a code</h2>
   <p>A code lets a computer or phone take part, so that nobody can flood the collection with made-up ballots. It does not identify your ballots.</p>
   <ul>
-    <li><b>By e-mail.</b> The server sends the code to the address you give. PeerSig does not keep the address in its database: it keeps a keyed hash of it, and how many codes it received (at most {{PER_IDENTITY}}). Nothing links that hash to your code.</li>
+    <li><b>By e-mail.</b> The server sends the code to the address you give. PeerSig does not keep the address in its database: it keeps a keyed hash of it, and how many codes it received (at most {{PER_IDENTITY}}; the count goes down by one each week, for every address at once, so that one more code can be had each week). Nothing links that hash to your code.</li>
     <li><b>With GitHub.</b> PeerSig asks GitHub for no permission, and reads only your account's number and creation date (accounts younger than {{GITHUB_DAYS}} days are refused). It keeps a keyed hash of the number. GitHub knows that you signed in to PeerSig; GitHub's own privacy statement applies to that.</li>
     <li><b>From the UCLouvain network.</b> The server checks that your connection comes from the university's network, and keeps nothing about you.</li>
     <li><b>From the study team</b>, who can hand out codes directly.</li>

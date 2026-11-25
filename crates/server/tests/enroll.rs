@@ -116,7 +116,7 @@ async fn code_by_mail() {
     assert_eq!(r.status(), 200);
     let policy = r.text().await.unwrap();
     assert!(policy.contains("<h1>Privacy policy</h1>") && policy.contains("mailto:team@example.org"), "{}", policy);
-    assert!(policy.contains("(at most 3)") && !policy.contains("{{"), "unfilled placeholder");
+    assert!(policy.contains("(at most 3;") && !policy.contains("{{"), "unfilled placeholder");
     assert!(index.contains(r#"href="/privacy""#), "the footer links to the policy");
 
     let post = |email: &str| http.post(format!("{}/enroll/mail", url)).form(&[("email", email)]).send();
@@ -156,15 +156,47 @@ async fn code_by_mail() {
 #[test]
 fn codes_per_identity() {
     let mut c = db::open(":memory:").unwrap();
-    assert!(db::enroll(&mut c, "h", "M", 2).unwrap().is_some());
-    let (code, label) = db::enroll(&mut c, "h", "M", 2).unwrap().unwrap();
+    let t = 1_795_000_000; // a Wednesday
+    assert!(db::enroll(&mut c, "h", "M", 2, t).unwrap().is_some());
+    let (code, label) = db::enroll(&mut c, "h", "M", 2, t).unwrap().unwrap();
     assert_eq!(label, "M02");
-    assert!(db::enroll(&mut c, "h", "M", 2).unwrap().is_none());
-    assert!(db::enroll(&mut c, "other", "G", 2).unwrap().is_some());
+    assert!(db::enroll(&mut c, "h", "M", 2, t).unwrap().is_none());
+    assert!(db::enroll(&mut c, "other", "G", 2, t).unwrap().is_some());
     // A code that could not be delivered is forgotten, and counts no more.
     db::unenroll(&mut c, "h", &code).unwrap();
     assert_eq!(db::code_active(&c, &db::code_hash(&code)).unwrap(), None);
-    assert!(db::enroll(&mut c, "h", "M", 2).unwrap().is_some());
+    assert!(db::enroll(&mut c, "h", "M", 2, t).unwrap().is_some());
+    assert!(db::enroll(&mut c, "h", "M", 2, t).unwrap().is_none());
+}
+
+/// One more code each week once the limit is reached, and no more than the
+/// limit at once after weeks without asking. Nothing per identity says when.
+#[test]
+fn codes_renew_each_week() {
+    let mut c = db::open(":memory:").unwrap();
+    let day = 86400;
+    let t = 1_795_000_000; // a Wednesday
+    let monday = (db::week(t) + 1) * 7 * day - 3 * day;
+    assert_eq!(db::week(monday), db::week(t) + 1);
+    assert_eq!(db::week(monday - 1), db::week(t));
+    let n = |c: &mut rusqlite::Connection, at: i64| (0..10).take_while(|_| db::enroll(c, "h", "M", 5, at).unwrap().is_some()).count();
+    assert_eq!(n(&mut c, t), 5);
+    // Later the same week: none. From Monday: one.
+    assert_eq!(n(&mut c, monday - 1), 0);
+    assert_eq!(n(&mut c, monday), 1);
+    assert_eq!(n(&mut c, monday + 6 * day), 0);
+    // Three weeks without asking: three, not more.
+    assert_eq!(n(&mut c, monday + 21 * day), 3);
+    // Ten weeks: back to the full five, and the row went in between.
+    assert!(db::enroll(&mut c, "other", "G", 5, monday + 70 * day).unwrap().is_some());
+    let rows: Vec<(String, u32)> = {
+        let mut st = c.prepare("SELECT hash, codes FROM identities").unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    };
+    assert_eq!(rows, vec![("other".to_string(), 1)]);
+    assert_eq!(n(&mut c, monday + 70 * day), 5);
+    // The clock going back changes nothing.
+    assert_eq!(n(&mut c, t), 0);
 }
 
 /// Stands in for github.com and api.github.com.

@@ -10,8 +10,9 @@
 //!
 //! What the server keeps: the code's hash and a label, as for codes made by
 //! hand, and in `identities` a keyed hash of the address or GitHub account
-//! with the number of codes it got (at most `per_identity`, one per
-//! computer). Nothing links the two. The address is used to send one
+//! with the number of codes it holds (at most `per_identity`, one per
+//! computer; every count drops by one each week, so a lost code or a new
+//! device can get one more). Nothing links the two. The address is used to send one
 //! message; GitHub's access token, for one request. Neither is stored or
 //! logged. From the institution's network, the connection's address is
 //! checked against the network's blocks and forgotten: nothing is kept.
@@ -58,7 +59,7 @@ pub struct Enrollment {
     pub relay_url: Option<String>,
     /// The study team's e-mail address, shown on the page and in messages.
     pub contact: Option<String>,
-    /// Codes one address or account can get.
+    /// Codes one address or account can hold; it gets one more each week.
     pub per_identity: u32,
     /// Codes the web page hands out per hour, all methods together.
     pub per_hour: u32,
@@ -247,7 +248,8 @@ pub fn ban_domain(s: &str) -> Option<String> {
 
 async fn new_code(state: &Arc<State>, identity: &str, prefix: &'static str, cap: u32) -> Result<Option<(String, String)>> {
     let (s, id) = (state.clone(), identity.to_string());
-    tokio::task::spawn_blocking(move || db::enroll(&mut s.db.lock().unwrap(), &id, prefix, cap)).await?
+    let now = (state.clock)();
+    tokio::task::spawn_blocking(move || db::enroll(&mut s.db.lock().unwrap(), &id, prefix, cap, now)).await?
 }
 
 // ---------------------------------------------------------------- e-mail
@@ -386,8 +388,9 @@ fn enough_message(e: &Enrollment) -> String {
         "Hello,
 
 Someone asked for a PeerSig enrollment code for this address, which
-already received {n}, the most one address can get. Use one of the codes
-you received (one per computer or phone).
+already received {n}, the most one address can hold. Use one of the codes
+you received (one per computer or phone). One more becomes available each
+week, for a lost code or a new device: ask again next week.
 
 If you did not ask for a code, ignore this message.
 {contact}
@@ -498,7 +501,7 @@ fn check_state(state: &State, p: Purpose, token: &str) -> Result<()> {
 
 pub enum GitHubOutcome {
     Code(String),
-    /// The account has `per_identity` codes already.
+    /// The account holds `per_identity` codes already.
     Enough,
     TooYoung,
     /// The admin banned this account.

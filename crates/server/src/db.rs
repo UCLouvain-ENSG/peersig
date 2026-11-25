@@ -10,7 +10,8 @@
 //!   journal is not a WAL and deleted pages are zeroed, so the file does
 //!   not keep the order ballots arrived in.
 //! - `identities`: for codes handed out by the web page, a keyed hash of
-//!   the e-mail address or GitHub account and how many codes it got. Not
+//!   the e-mail address or GitHub account and how many codes it holds
+//!   against its limit: one fewer each week, for every row at once. Not
 //!   the address, not which code, not when.
 //! - `bans`: e-mail addresses and GitHub accounts refused a code, as the
 //!   same keyed hash, and mail domains, in clear; the admin's note and the
@@ -239,9 +240,12 @@ pub fn add_labelled_code(c: &Connection, prefix: &str) -> Result<(String, String
 }
 
 /// A new code for `identity` (a keyed hash), labelled `<prefix><n>`, if
-/// it got fewer than `cap` codes so far. Returns (code, label).
-pub fn enroll(c: &mut Connection, identity: &str, prefix: &str, cap: u32) -> Result<Option<(String, String)>> {
+/// it holds fewer than `cap` codes. Returns (code, label). Each week the
+/// count drops by one (`renew_identities`): `cap` codes at once, then one
+/// more a week, for a lost code or a new device.
+pub fn enroll(c: &mut Connection, identity: &str, prefix: &str, cap: u32, now: i64) -> Result<Option<(String, String)>> {
     let tx = c.transaction()?;
+    renew_identities(&tx, now)?;
     let had: u32 = tx.query_row("SELECT codes FROM identities WHERE hash = ?1", [identity], |r| r.get(0)).optional()?.unwrap_or(0);
     if had >= cap {
         return Ok(None);
@@ -253,6 +257,28 @@ pub fn enroll(c: &mut Connection, identity: &str, prefix: &str, cap: u32) -> Res
     )?;
     tx.commit()?;
     Ok(Some((code, label)))
+}
+
+/// Weeks since 1970, starting on Mondays (UTC).
+pub fn week(t: i64) -> i64 {
+    (t + 3 * 86400).div_euclid(7 * 86400)
+}
+
+/// Every identity's count drops by one for each week begun since the
+/// last time (rows reaching zero go), all at once: one week number for the
+/// whole table, in `meta`, so nothing says when an identity got its codes.
+fn renew_identities(c: &Connection, now: i64) -> Result<()> {
+    let w = week(now);
+    let last = meta_get(c, "identities-week")?.and_then(|v| <[u8; 8]>::try_from(v.as_slice()).ok()).map(i64::from_le_bytes);
+    match last {
+        Some(l) if l >= w => return Ok(()),
+        Some(l) => {
+            c.execute("UPDATE identities SET codes = codes - ?1", [w - l])?;
+            c.execute("DELETE FROM identities WHERE codes <= 0", [])?;
+        }
+        None => {}
+    }
+    meta_set(c, "identities-week", &w.to_le_bytes())
 }
 
 /// Undoes [`enroll`] when the code could not be delivered.

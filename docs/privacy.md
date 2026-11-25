@@ -80,8 +80,10 @@ one from the server's web page:
 
 - **By e-mail.** The server sends the code to the address given. It keeps a
   keyed hash of the address (HMAC, with a key stored in the database) and
-  how many codes it got, so that one address gets at most three (one per
-  computer or phone). It does not keep the address, and nothing links the hash to
+  how many codes it got, so that one address holds at most five (one per
+  computer or phone). Each week every count goes down by one, all at once,
+  so a lost code or a new device can get one more a week; nothing per
+  address says when. It does not keep the address, and nothing links the hash to
   the code. Plus-tags are folded (`alice+x@` counts as `alice@`).
 - **With GitHub.** GitHub's sign-in page asks for no permission: the server
   only reads the account's number and creation date (accounts younger than

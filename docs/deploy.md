@@ -66,7 +66,7 @@ The web page and enrollment from it (`serve` only):
 | `--mail-from` | `PEERSIG_MAIL_FROM` | none | `PeerSig <peersig@example.org>` |
 | `--github-client-id`, `--github-client-secret` | `PEERSIG_GITHUB_CLIENT_ID`, `PEERSIG_GITHUB_CLIENT_SECRET` | none | Codes with a GitHub account |
 | `--github-min-age-days` | `PEERSIG_GITHUB_MIN_AGE_DAYS` | 30 | Younger GitHub accounts get no code |
-| `--codes-per-identity` | `PEERSIG_CODES_PER_IDENTITY` | 3 | Codes per address or GitHub account |
+| `--codes-per-identity` | `PEERSIG_CODES_PER_IDENTITY` | 5 | Codes an address or GitHub account can hold; one more each week |
 | `--enroll-per-hour` | `PEERSIG_ENROLL_PER_HOUR` | 60 | Codes the page hands out per hour |
 | `--enroll-networks` | `PEERSIG_ENROLL_NETWORKS` | none | Address blocks whose visitors get a code with one click, comma-separated (`130.104.0.0/16,2001:6a8:3080::/44`) |
 | `--enroll-network-name` | `PEERSIG_ENROLL_NETWORK_NAME` | institution's | Their name on the page |

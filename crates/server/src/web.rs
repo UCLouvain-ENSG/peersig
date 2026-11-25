@@ -188,7 +188,7 @@ fn methods(e: &Enrollment) -> String {
         m.push_str(&format!(
             r#"<div class="method"><h3>By e-mail</h3>
 <form method="post" action="/enroll/mail"><input type="email" name="email" required maxlength="254" placeholder="you@example.org" autocomplete="email" aria-label="E-mail address"><button class="btn" type="submit">Send me a code</button></form>
-<p>The address is not kept: only a keyed hash, so that it gets at most {n} codes (one per computer or phone). Nothing links it to your code.</p></div>"#,
+<p>The address is not kept: only a keyed hash, so that it gets at most {n} codes (one per computer or phone), then one more a week. Nothing links it to your code.</p></div>"#,
             n = e.per_identity
         ));
     }
@@ -357,7 +357,7 @@ async fn github_callback(AxState(w): AxState<Arc<Web>>, Query(q): Query<Callback
         Ok(GitHubOutcome::Enough) => message(
             StatusCode::OK,
             "You have enough codes",
-            &format!("This GitHub account already received {} codes, the most one account can get. Use one of them (one per computer or phone).", w.enroll.per_identity),
+            &format!("This GitHub account already received {} codes, the most one account can hold. Use one of them (one per computer or phone). One more becomes available each week, for a lost code or a new device: come back next week.", w.enroll.per_identity),
         ),
         Ok(GitHubOutcome::TooYoung) => message(
             StatusCode::FORBIDDEN,
