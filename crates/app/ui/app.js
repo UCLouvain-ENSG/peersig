@@ -352,6 +352,7 @@ function flagChips(o) {
 // Removes items from the reports, or puts them back, and says so in their
 // rows without rebuilding the page (its scroll and open groups stay).
 async function setExcluded(list, excluded) {
+  if (!list.length) return;
   await call("set_excluded", { keys: list.map((o) => o.key), excluded });
   for (const o of list) {
     o.excluded = excluded;
@@ -361,6 +362,43 @@ async function setExcluded(list, excluded) {
     }
   }
   for (const g of groupsOf(list)) g.sync();
+  for (const o of items ? items.items : []) for (const r of o.rows || []) if (r.note) r.note();
+}
+
+// Each "connection to" row's application with the same fingerprint: its
+// handshake row. A name left out leaves that row as it is.
+function linkNames(list) {
+  const hellos = new Map();
+  const key = (it) => `${(it.app || {}).name}\n${it.ja4}`;
+  for (const o of list) if (o.item.type === "hello") hellos.set(key(o.item), [...(hellos.get(key(o.item)) || []), o]);
+  for (const o of list) if (o.item.type === "domain") o.hellos = hellos.get(key(o.item)) || [];
+}
+
+// Leaves out the server names of the "connection to" rows in `list`, and
+// keeps their applications' fingerprints: each one's handshake row is
+// ticked again if it was not (`all`), or if the review does not show it
+// first for itself.
+async function hideNames(list, all) {
+  const names = list.filter((o) => o.item.type === "domain");
+  const keep = [...new Set(names.flatMap((o) => o.hellos || []))].filter((h) => h.excluded && (all || !(h.flags || []).length));
+  await setExcluded(names.filter((o) => !o.excluded), true);
+  await setExcluded(keep, false);
+}
+
+// Under a "connection to" row: what goes once its name is left out, or a
+// way to leave out the name alone.
+function nameNote(o) {
+  const app = (o.item.app || {}).name || "The application";
+  if (!o.excluded) {
+    return [el("button", { class: "btn small", title: `Leave out ${o.item.domain}; ${app} and this fingerprint still go, as a handshake`, onclick: () => hideNames([o], true).catch(() => {}) }, "Hide the name only")];
+  }
+  const sent = (o.hellos || []).some((h) => !h.excluded);
+  if (sent) return [`Name left out. ${app} and this fingerprint still go, as a handshake.`];
+  if ((o.hellos || []).length) {
+    return [`Name left out. ${app}'s handshake with this fingerprint is unticked too. `,
+      el("button", { class: "btn small", onclick: () => setExcluded(o.hellos.filter((h) => h.excluded), false).catch(() => {}) }, "Send the handshake")];
+  }
+  return [`Name left out. ${app} has no handshake with this fingerprint this week.`];
 }
 
 const groupsOf = (list) => [...new Set(list.map((o) => o.group).filter(Boolean))];
@@ -368,7 +406,8 @@ const groupsOf = (list) => [...new Set(list.map((o) => o.group).filter(Boolean))
 function itemRow(o, showFlags) {
   const it = o.item;
   const app = it.app || {};
-  const box = el("input", { type: "checkbox", checked: !o.excluded, title: "Send this item" });
+  const box = el("input", { type: "checkbox", checked: !o.excluded, title: it.type === "domain" ? "Send this server name" : "Send this item" });
+  const note = it.type === "domain" ? el("div", { class: "muted small name-note" }, ...nameNote(o)) : null;
   const tr = el("tr", { class: o.excluded ? "excluded" : "" },
     el("td", {}, box),
     el("td", {}, el("div", {}, app.name, app.version ? el("span", { class: "muted" }, " " + app.version) : null,
@@ -376,11 +415,11 @@ function itemRow(o, showFlags) {
       el("span", { class: "chip" }, app.kind || ""), app.engine ? el("span", { class: "muted small" }, " " + app.engine) : null,
       app.id || app.team_id ? el("div", { class: "mono muted small" }, [app.id, app.team_id ? `${state.os === "windows" ? "publisher" : "team"} ${app.team_id}` : null].filter(Boolean).join(" · ")) : null,
       showFlags ? el("div", {}, ...flagChips(o)) : null),
-    el("td", {}, ...describe(it)),
+    el("td", { class: "what" }, el("div", { class: "desc" }, ...describe(it)), note),
     el("td", { class: "muted" }, o.count.toLocaleString()),
     el("td", { class: "muted small" }, [...o.procs].join(", ")));
   box.addEventListener("change", () => setExcluded([o], !box.checked).catch(() => (box.checked = !o.excluded)));
-  (o.rows = o.rows || []).push({ tr, box });
+  (o.rows = o.rows || []).push({ tr, box, note: note && (() => note.replaceChildren(...nameNote(o))) });
   return tr;
 }
 
@@ -435,6 +474,7 @@ function renderItems() {
     el("button", { class: "btn", onclick: loadItems, disabled: itemsLoading }, itemsLoading ? "Reading the logs…" : "Refresh"));
   if (!items) return el("div", {}, head, el("p", { class: "muted" }, "Reading the logs… The first time can take a few seconds."));
   for (const o of items.items) o.rows = [];
+  linkNames(items.items);
   const q = search.trim().toLowerCase();
   const shown = items.items.filter((o) => matches(o, q));
   const first = shown.filter((o) => (o.flags || []).length);
@@ -471,12 +511,15 @@ function renderItems() {
       ? el("div", {}, itemTable(first, true),
           el("div", { class: "row" },
             el("button", { class: "btn", onclick: () => setExcluded(first.filter((o) => !o.excluded), true) }, "Leave all of these out"),
+            first.some((o) => o.item.type === "domain")
+              ? el("button", { class: "btn", title: "Leave out the server names among these; their applications' fingerprints still go, as handshakes", onclick: () => hideNames(first, false) }, "Hide their server names only")
+              : null,
             el("button", { class: "btn", onclick: () => setExcluded(first.filter((o) => o.excluded), false) }, "Send all of these")))
       : el("p", { class: "muted" }, q ? "None matches." : `None: no item contains a sensitive word or one of yours${state.model && !state.model.problem ? `, and ${MODEL} pointed out none` : ""}.`),
     el("h3", {}, `Everything else, by application (${count(rest.length, "item")})`),
     el("p", { class: "muted small" }, "Untick an application to leave all its items out, or open it to choose."),
     el("div", {}, apps.map((a) => appGroup(a, byApp.get(a), !!q && apps.length <= 20))),
-    el("p", { class: "muted small" }, `¹ Stays on this ${device()}: how often, and which ${android() ? "apps" : "processes"}. Everything else in a ticked row is sent, as shown: the application (${android() ? appFields() : "name, version, kind, engine, bundle id, signing team or publisher"}), the transport and fingerprint, and the server name of a “connection to” row (those carry no version). Each item also gives the system and its major version${os ? ` (${os})` : ""}. Once per ${unit()}, however often it was seen.`),
+    el("p", { class: "muted small" }, `¹ Stays on this ${device()}: how often, and which ${android() ? "apps" : "processes"}. Everything else in a ticked row is sent, as shown: the application (${android() ? appFields() : "name, version, kind, engine, bundle id, signing team or publisher"}), the transport and fingerprint, and the server name of a “connection to” row (those carry no version). “Hide the name only” leaves out a server name and keeps its application's handshake with that fingerprint. Each item also gives the system and its major version${os ? ` (${os})` : ""}. Once per ${unit()}, however often it was seen.`),
     el("p", { class: "muted small" },
       `Not collected: ${sk.unattributed} handshakes with no known application; ${sk.browser_domains} names contacted by browsers (browsing history is never collected)` +
       (state.settings.share_domains ? `; ${sk.private_domains} local or private names; ${sk.not_sni} names seen only in DNS or plain HTTP.` : `; ${sk.domains_off} server names (sharing is off).`)),
@@ -637,7 +680,9 @@ function render() {
   else if (tab === "privacy") view = renderPrivacy();
   else if (tab === "settings") view = renderSettings();
   else view = renderOverview();
-  main.replaceChildren(view);
+  // The saved state could not be read as it was (`Core::load`).
+  const problem = state.state_problem ? el("div", { class: "notice error" }, state.state_problem) : null;
+  main.replaceChildren(...[problem, view].filter(Boolean));
 }
 
 for (const b of document.querySelectorAll("#tabs button")) b.addEventListener("click", () => setTab(b.dataset.tab));

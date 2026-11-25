@@ -102,13 +102,16 @@ async fn ask_model(host: Arc<dyn Host>, core: Shared) {
 }
 
 async fn tick(host: &Arc<dyn Host>, core: &Shared) {
-    let settings = {
+    let (settings, readable) = {
         let mut c = core.lock().await;
+        // The saved state could not be read at start: nothing runs on a
+        // state that cannot be saved, until it can be read.
+        let readable = c.retry_load();
         c.probe = local::status(&c.p.settings.logs());
-        c.p.settings.clone()
+        (c.p.settings.clone(), readable)
     };
     host.tick(&settings);
-    if !settings.enrolled() {
+    if !readable || !settings.enrolled() {
         return;
     }
 

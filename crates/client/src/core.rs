@@ -232,6 +232,13 @@ pub struct Model {
 
 pub struct Core {
     path: PathBuf,
+    /// Why the saved state could not be read as it was, for the window.
+    pub state_problem: Option<String>,
+    /// False while `state.json` exists but cannot be read: nothing is
+    /// saved over it (`retry_load`).
+    can_save: bool,
+    /// The enrollment as last copied to `enrollment.json`.
+    copied: Option<EnrollmentCopy>,
     pub host: Arc<dyn Host>,
     pub p: Persisted,
     pub config: Option<(i64, Config)>,
@@ -271,6 +278,8 @@ pub struct View {
     pub current: Option<Report>,
     pub reports: Vec<Report>,
     pub last_error: Option<String>,
+    /// The saved state could not be read as it was (`Core::load`).
+    pub state_problem: Option<String>,
     pub now: i64,
     /// Handshakes not reported yet, and in all.
     pub counts: Option<Counts>,
@@ -321,7 +330,7 @@ pub async fn read<T: Send + 'static>(core: &Shared, f: impl FnOnce(&Reader) -> T
 impl Core {
     pub fn load(dir: &Path, host: Arc<dyn Host>) -> Core {
         let path = dir.join("state.json");
-        let mut p: Persisted = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let Loaded { mut p, problem, can_save } = read_state(&path);
         // Saved before the defaults existed, and never enrolled.
         if p.settings.server.is_empty() && p.settings.consented.is_none() {
             p.settings.server = DEFAULT_SERVER.into();
@@ -333,6 +342,9 @@ impl Core {
         let answers = if host.has_model() { Answers::load(&path) } else { Answers::default() };
         Core {
             path,
+            state_problem: problem,
+            can_save,
+            copied: None,
             host,
             p,
             config: None,
@@ -347,6 +359,27 @@ impl Core {
             counts: None,
             review: None,
         }
+    }
+
+    /// While the saved state cannot be read (`can_save` false), tries
+    /// again; once it can, takes it, as at start. Returns whether the
+    /// state can be saved now.
+    pub fn retry_load(&mut self) -> bool {
+        if self.can_save {
+            return true;
+        }
+        let Some(dir) = self.path.parent().map(Path::to_path_buf) else { return false };
+        let fresh = Core::load(&dir, self.host.clone());
+        if !fresh.can_save {
+            return false;
+        }
+        self.p = fresh.p;
+        self.state_problem = fresh.state_problem;
+        self.can_save = true;
+        self.config = None;
+        self.counts = None;
+        self.review = None;
+        true
     }
 
     /// Where the state is saved (`state.json`).
@@ -403,19 +436,30 @@ impl Core {
         new_day
     }
 
-    pub fn save(&self) -> Result<()> {
-        if let Some(d) = self.path.parent() {
-            std::fs::create_dir_all(d)?;
+    pub fn save(&mut self) -> Result<()> {
+        if !self.can_save {
+            anyhow::bail!(
+                "PeerSig cannot read its saved state ({}), so it saves nothing over it. Quit PeerSig and start it again.",
+                self.path.display()
+            );
         }
-        let tmp = self.path.with_extension("tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&self.p)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        write_private(&self.path, &serde_json::to_vec_pretty(&self.p)?)?;
+        // The enrollment's own copy, when it changed.
+        let copy = EnrollmentCopy::of(&self.p.settings);
+        if copy.is_some() && copy != self.copied {
+            if let Some(c) = &copy {
+                write_private(&EnrollmentCopy::path(&self.path), &serde_json::to_vec_pretty(c)?)?;
+            }
+            self.copied = copy;
         }
-        std::fs::rename(&tmp, &self.path)?;
         Ok(())
+    }
+
+    /// Leaving the study: the enrollment's copy goes too. Nothing else
+    /// removes it.
+    pub fn forget_enrollment(&mut self) {
+        let _ = std::fs::remove_file(EnrollmentCopy::path(&self.path));
+        self.copied = None;
     }
 
     pub fn cycle(&self) -> Option<Cycle> {
@@ -452,6 +496,7 @@ impl Core {
                 r
             }).collect(),
             last_error: self.last_error.clone(),
+            state_problem: self.state_problem.clone(),
             now: now(),
             counts: self.counts.clone(),
             review: self.review.clone().filter(|r| self.current_report().is_some_and(|c| c.epoch == r.epoch)),
@@ -637,6 +682,180 @@ pub fn schedule(core: &mut Core, epoch: u32, p: Prepared, spread: i64) {
     r.error = None;
 }
 
+/// Writes `bytes` to `path` through a temporary file (readable by this
+/// account only), so the file is always whole.
+fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// The enrollment, also kept in a file of its own (`enrollment.json`,
+/// next to the state), and put back if the state ever comes without it.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+struct EnrollmentCopy {
+    server: String,
+    relay: String,
+    code: String,
+    consented: Option<String>,
+    share_domains: bool,
+}
+
+impl EnrollmentCopy {
+    fn path(state: &Path) -> PathBuf {
+        state.with_file_name("enrollment.json")
+    }
+
+    fn of(s: &Settings) -> Option<EnrollmentCopy> {
+        s.enrolled().then(|| EnrollmentCopy {
+            server: s.server.clone(),
+            relay: s.relay.clone(),
+            code: s.code.clone(),
+            consented: s.consented.clone(),
+            share_domains: s.share_domains,
+        })
+    }
+
+    fn read(state: &Path) -> Option<EnrollmentCopy> {
+        let c: EnrollmentCopy = serde_json::from_slice(&std::fs::read(Self::path(state)).ok()?).ok()?;
+        (!c.server.is_empty() && !c.code.is_empty() && c.consented.is_some()).then_some(c)
+    }
+
+    fn restore(self, s: &mut Settings) {
+        s.server = self.server;
+        s.relay = self.relay;
+        s.code = self.code;
+        s.consented = self.consented;
+        s.share_domains = self.share_domains;
+    }
+}
+
+/// What `read_state` found.
+struct Loaded {
+    p: Persisted,
+    problem: Option<String>,
+    can_save: bool,
+}
+
+/// Reads `state.json`. A missing file is a first start; nothing else may
+/// end a participation. An update of PeerSig once started without the
+/// participant's code and asked for it again, and what it saved next
+/// replaced the state. So:
+///
+/// - a file that cannot be opened (another program holds it: an
+///   antivirus, the copy of PeerSig being replaced) is tried again for a
+///   few seconds, then left alone: nothing is saved over it until it can
+///   be read (`Core::retry_load`);
+/// - a file that is not what this version reads (written by another) is
+///   copied aside, and what can be read of it is kept: the enrollment, the
+///   items removed, the reports, the counts;
+/// - the enrollment has a copy of its own (`EnrollmentCopy`), put back
+///   when the state lacks it.
+fn read_state(path: &Path) -> Loaded {
+    let mut tries = 0;
+    let bytes = loop {
+        match std::fs::read(path) {
+            Ok(b) => break Some(b),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break None,
+            Err(e) => {
+                tries += 1;
+                if tries >= 10 {
+                    let mut p = Persisted::default();
+                    if let Some(c) = EnrollmentCopy::read(path) {
+                        c.restore(&mut p.settings);
+                    }
+                    return Loaded {
+                        p,
+                        problem: Some(format!(
+                            "PeerSig cannot read its saved state ({}: {}). It saves nothing until it can, and tries again every 30 seconds.",
+                            path.display(),
+                            e
+                        )),
+                        can_save: false,
+                    };
+                }
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+        }
+    };
+    let (mut p, mut problem) = match bytes {
+        None => (Persisted::default(), None),
+        Some(b) => match serde_json::from_slice::<Persisted>(&b) {
+            Ok(p) => (p, None),
+            Err(e) => {
+                let aside = path.with_file_name(format!("state.unreadable-{}.json", now()));
+                let kept = std::fs::write(&aside, &b).is_ok();
+                #[cfg(unix)]
+                if kept {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&aside, std::fs::Permissions::from_mode(0o600));
+                }
+                let p = salvage(&b).unwrap_or_default();
+                let copy = if kept { format!(" A copy of it is kept as {}.", aside.display()) } else { String::new() };
+                (p, Some(format!("PeerSig could not read all of its saved state ({}), and kept what it could.{}", e, copy)))
+            }
+        },
+    };
+    if !p.settings.enrolled() {
+        if let Some(c) = EnrollmentCopy::read(path) {
+            c.restore(&mut p.settings);
+            problem.get_or_insert_with(|| "PeerSig's saved state had no enrollment: it was put back from its copy (enrollment.json).".into());
+        }
+    }
+    Loaded { p, problem, can_save: true }
+}
+
+/// What can be read of a state this version does not read whole: each
+/// setting, report and count on its own.
+fn salvage(bytes: &[u8]) -> Option<Persisted> {
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let v = v.as_object()?;
+    let mut p = Persisted::default();
+    if let Some(s) = v.get("settings") {
+        p.settings = lenient(s);
+    }
+    if let Some(a) = v.get("excluded").and_then(|x| x.as_array()) {
+        p.excluded = a.iter().filter_map(|k| k.as_str().map(String::from)).collect();
+    }
+    if let Some(m) = v.get("reports").and_then(|x| x.as_object()) {
+        for (k, r) in m {
+            if let (Ok(e), Ok(r)) = (k.parse::<u32>(), serde_json::from_value::<Report>(r.clone())) {
+                p.reports.insert(e, r);
+            }
+        }
+    }
+    if let Some(m) = v.get("seen").and_then(|x| x.as_object()) {
+        p.seen = m.iter().filter_map(|(d, n)| Some((d.clone(), n.as_u64()?))).collect();
+    }
+    Some(p)
+}
+
+/// `T` from `v`, field by field: a field this version cannot read keeps
+/// its default, the others are kept.
+fn lenient<T: Serialize + serde::de::DeserializeOwned + Default>(v: &serde_json::Value) -> T {
+    let mut base = match serde_json::to_value(T::default()) {
+        Ok(serde_json::Value::Object(m)) => m,
+        _ => return T::default(),
+    };
+    for (k, x) in v.as_object().into_iter().flatten() {
+        let mut trial = base.clone();
+        trial.insert(k.clone(), x.clone());
+        if serde_json::from_value::<T>(serde_json::Value::Object(trial.clone())).is_ok() {
+            base = trial;
+        }
+    }
+    serde_json::from_value(serde_json::Value::Object(base)).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,6 +863,98 @@ mod tests {
     use peersig_proto::EpochSpec;
     use peersig_server::{api, db, system_clock, State};
     use std::io::Write;
+
+    fn enrolled_state(dir: &Path) -> Core {
+        let _ = std::fs::remove_dir_all(dir);
+        let mut core = Core::load(dir, host());
+        core.p.settings.code = "K7QF-2M9D-XW4P".into();
+        core.p.settings.consented = Some("2026-11-17T12:09:18+00:00".into());
+        core.p.excluded.insert("removed-item".into());
+        core.p.seen.insert("20261117".into(), 30735);
+        core.save().unwrap();
+        core
+    }
+
+    /// A state this version cannot read whole (here, a setting of another
+    /// type, as a future or past version could write) keeps the
+    /// enrollment, the items removed and the counts, and a copy of the
+    /// file is kept aside.
+    #[test]
+    fn unparsable_state_keeps_the_enrollment() {
+        let tmp = std::env::temp_dir().join(format!("peersig-salvage-{}", std::process::id()));
+        enrolled_state(&tmp);
+        // The copy would put the enrollment back on its own: this test is
+        // about the state file.
+        std::fs::remove_file(tmp.join("enrollment.json")).unwrap();
+        let path = tmp.join("state.json");
+        let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        v["settings"]["review_hours"] = serde_json::json!("a day");
+        v["reports"] = serde_json::json!({"3": {"epoch": "three"}});
+        std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+        assert!(serde_json::from_slice::<Persisted>(&std::fs::read(&path).unwrap()).is_err());
+
+        let core = Core::load(&tmp, host());
+        assert!(core.p.settings.enrolled());
+        assert_eq!(core.p.settings.code, "K7QF-2M9D-XW4P");
+        assert_eq!(core.p.settings.review_hours, 24);
+        assert!(core.p.excluded.contains("removed-item"));
+        assert_eq!(core.p.seen.get("20261117"), Some(&30735));
+        assert!(core.p.reports.is_empty());
+        assert!(core.state_problem.as_deref().is_some_and(|p| p.contains("state.unreadable-")), "{:?}", core.state_problem);
+        let aside = std::fs::read_dir(&tmp).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("state.unreadable-")).count();
+        assert_eq!(aside, 1);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The enrollment's copy comes back when the state lost it (a broken
+    /// file, a file replaced); leaving removes the copy.
+    #[tokio::test]
+    async fn enrollment_copy() {
+        let tmp = std::env::temp_dir().join(format!("peersig-copy-{}", std::process::id()));
+        enrolled_state(&tmp);
+        std::fs::write(tmp.join("state.json"), b"{\"settings\": {\"code\": \"\"").unwrap();
+        let core = Core::load(&tmp, host());
+        assert_eq!(core.p.settings.code, "K7QF-2M9D-XW4P");
+        assert!(core.p.settings.enrolled() && core.state_problem.is_some());
+
+        std::fs::remove_file(tmp.join("state.json")).unwrap();
+        let core = Core::load(&tmp, host());
+        assert!(core.p.settings.enrolled());
+        assert!(core.state_problem.as_deref().is_some_and(|p| p.contains("enrollment.json")));
+
+        let shared: crate::Shared = Arc::new(tokio::sync::Mutex::new(core));
+        crate::commands::leave(&shared, false).await.unwrap();
+        assert!(!tmp.join("enrollment.json").exists());
+        let core = Core::load(&tmp, host());
+        assert!(!core.p.settings.enrolled() && core.state_problem.is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A state that exists but cannot be read is never replaced: nothing
+    /// is saved until it can be read, and then it is taken as it is.
+    #[test]
+    fn unreadable_state_is_not_replaced() {
+        let tmp = std::env::temp_dir().join(format!("peersig-unreadable-{}", std::process::id()));
+        let saved = std::fs::read(enrolled_state(&tmp).state_path()).unwrap();
+        let path = tmp.join("state.json");
+        std::fs::remove_file(&path).unwrap();
+        // A directory in its place: reading fails, and not with NotFound.
+        std::fs::create_dir(&path).unwrap();
+        let mut core = Core::load(&tmp, host());
+        assert!(core.state_problem.is_some());
+        // The copy gives the enrollment back for the window...
+        assert!(core.p.settings.enrolled());
+        // ...but nothing is written.
+        assert!(core.save().is_err());
+        assert!(!core.retry_load());
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, &saved).unwrap();
+        assert!(core.retry_load());
+        assert!(core.state_problem.is_none());
+        assert!(core.p.excluded.contains("removed-item"));
+        core.save().unwrap();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     /// "Send now" skips the review of the report under review, and only of
     /// that one; with nothing to send, it says why and arms nothing.

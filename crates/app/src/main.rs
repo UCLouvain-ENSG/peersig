@@ -341,6 +341,15 @@ fn keep_linux_probe(app: &AppHandle, s: &core::Settings) {
 
 fn main() {
     let app = tauri::Builder::default()
+        // One PeerSig per account: a second start (the installer's, the
+        // login entry, the Start menu while it runs in the tray) shows the
+        // running one's window and ends. Two would each run the reports
+        // and write the same state.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !args.iter().any(|a| a == "--background") {
+                show_window(app);
+            }
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--background"])))
         .plugin(tauri_plugin_updater::Builder::new().build())

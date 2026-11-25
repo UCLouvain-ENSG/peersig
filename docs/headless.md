@@ -48,6 +48,9 @@ journalctl -u peersig               # what the service did
 `peersig items` lists first the items whose application or server name
 has a word of the sensitive list (`crates/proto/data/sensitive.txt`:
 health, dating, religion...), each with its category in brackets.
+Excluding a `domain` item leaves out only the server name: the
+application's `hello` item with the same JA4 is a separate item, and
+still goes unless it is excluded too.
 
 Every command reads the settings file first; options and environment
 variables of the same names (`PEERSIG_CODE`, `PEERSIG_RELAY`,

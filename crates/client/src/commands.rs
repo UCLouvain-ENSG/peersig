@@ -153,6 +153,7 @@ pub async fn leave(core: &Shared, delete_logs: bool) -> R<()> {
     c.review = None;
     c.config = None;
     c.save().map_err(e2s)?;
+    c.forget_enrollment();
     if delete_logs {
         if let Ok(rd) = std::fs::read_dir(&logs) {
             for e in rd.flatten() {
