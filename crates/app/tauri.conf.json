@@ -13,7 +13,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJBM0ZDRTA3NzE4M0IzOEEKUldTS3M0TnhCODQvS2hsTnpTaDF0Z1RZaTFweVlVZmV4TGsvU2xIZDdFdk13T1Q4SXBNZmtLcFMK",
       "endpoints": ["https://github.com/UCLouvain-ENSG/peersig/releases/latest/download/latest.json"],
       "windows": { "installMode": "passive" }
     }
