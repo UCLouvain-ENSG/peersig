@@ -194,10 +194,45 @@ Pushing a tag `v<version>` runs `.github/workflows/release.yml`:
   `peersig-headless-<version>-1.x86_64.rpm`, built with nfpm by
   `crates/headless/packaging/build.sh`, installed and checked on the
   runner by `smoke.sh`);
+- with the updater key, each desktop package's signature (`.sig`), the
+  macOS update (`PeerSig_<version>_<arch>.app.tar.gz`) and `latest.json`
+  (below);
 - `SHA256SUMS`.
 
 They go to a **draft** release; check it and publish it on GitHub. The tag
 must match the version in `Cargo.toml` and `crates/app/tauri.conf.json`.
+
+### App updates
+
+Once a day the desktop app reads
+`https://github.com/UCLouvain-ENSG/peersig/releases/latest/download/latest.json`,
+the manifest of the latest **published** release (a draft is never
+offered), and shows a newer version in its window and tray; the
+participant installs it with one click (`crates/app/src/update.rs`). The
+package's signature must match the public key in `crates/app/tauri.conf.json`
+(`plugins.updater.pubkey`); with that key empty, the app never checks.
+
+The key pair is made once, kept offline with the other signing keys, and
+never changes (a new key would cut installed apps off from updates):
+
+```sh
+npx --yes @tauri-apps/cli@2 signer generate -w ~/.tauri/peersig-updater.key
+```
+
+It asks for a password. Put the public key (`peersig-updater.key.pub`) in
+`plugins.updater.pubkey`, and add the repository secrets
+`TAURI_SIGNING_PRIVATE_KEY` (the private key file's content) and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. With them, the workflow builds the
+packages with `createUpdaterArtifacts`, uploads their signatures, and the
+`updater` job writes `latest.json` with `scripts/updater_manifest.py`
+(one entry per package type: MSI, `.app`, AppImage, `.deb`, `.rpm`; the
+release commit's subject is the update's note). Without them, releases
+carry no manifest and installed apps see no update.
+
+Updating the app does not update the capture service (macOS, Windows): the
+window then offers "Update capture service", which asks for an
+administrator, as on the first install. On Linux, `.deb` and `.rpm`
+updates ask for the password through `pkexec`.
 
 Without Apple secrets, the macOS builds are signed ad hoc
 (`signingIdentity: "-"` in `tauri.conf.json`): the first time, macOS

@@ -314,8 +314,23 @@ function connectionCard() {
   );
 }
 
+// A newer PeerSig, found by the desktop app's daily check (none on
+// Android, which has no such command). Installed only on request.
+let update = null;
+
+function updateCard() {
+  if (!update) return null;
+  return el("div", { class: "card" },
+    el("h2", {}, "Update"),
+    el("p", {}, `PeerSig ${update.version} is available.`),
+    update.notes ? el("p", { class: "muted small" }, update.notes) : null,
+    el("p", { class: "muted small" }, "It is signed by the study and checked before installing. PeerSig restarts afterwards" +
+      (update.asks_password ? (state.os === "windows" ? "; Windows asks for an administrator's permission." : "; your computer asks for your password.") : ".")),
+    el("div", { class: "row" }, busyButton("btn primary", `Install PeerSig ${update.version}`, "Installing…", () => call("install_update"))));
+}
+
 function renderOverview() {
-  return el("div", { class: "grid" }, captureCard(), reportCard(), connectionCard());
+  return el("div", { class: "grid" }, updateCard(), captureCard(), reportCard(), connectionCard());
 }
 
 // ------------------------------------------------------------ items
@@ -515,7 +530,7 @@ function renderObserverPrivacy() {
       el("li", {}, el("strong", {}, "Review. "), state.settings.review_hours ? `Each day's list waits ${state.settings.review_hours} hours before it is sent; untick anything.` : "No review: each day's list is sent shortly after midnight UTC. Settings can add one."),
       el("li", {}, el("strong", {}, "Apart from participants. "), "Observers' items never count towards the participants' table."),
       el("li", {}, el("strong", {}, "Local logs. "), `The capture logs stay on this ${device()} and are deleted after two weeks.`),
-      android() ? vpnPrivacy() : null,
+      android() ? vpnPrivacy() : el("li", {}, el("strong", {}, "Updates. "), "Once a day the app downloads a public file from GitHub to see whether a new version exists; it carries nothing about you, and the study's server sees no such check. An update installs only when you ask, and only with the study's signature."),
     ),
     el("div", { class: "row" }, policyButton(), el("button", { class: "btn", onclick: () => call("open_url", { url: "https://github.com/UCLouvain-ENSG/peersig/blob/main/docs/observers.md" }) }, "About observers")),
   );
@@ -546,7 +561,7 @@ function renderPrivacy() {
       el("li", {}, el("strong", {}, "Thresholds. "), c ? `The study publishes an item only once at least ${c.k_hello} participants reported it in the same week (${c.k_domain} for server names).` : "Items are published only above a participant threshold."),
       el("li", {}, el("strong", {}, "Counts only. "), "The server keeps one counter per item and week: no individual ballots, no arrival times."),
       el("li", {}, el("strong", {}, "Local logs. "), `The capture logs stay on this ${device()} and are deleted after two weeks.`),
-      android() ? vpnPrivacy() : null,
+      android() ? vpnPrivacy() : el("li", {}, el("strong", {}, "Updates. "), "Once a day the app downloads a public file from GitHub to see whether a new version exists; it carries nothing about you, and the study's server sees no such check. An update installs only when you ask, and only with the study's signature."),
     ),
     c ? el("p", { class: "muted small" }, `Token key for this week: ${c.token_key.key_id}. The app checks that the server signs with the key everyone sees, and that the relay and the server publish the same encryption key.`) : null,
     c && c.about_url ? el("div", { class: "row" }, el("button", { class: "btn", onclick: () => call("open_url", { url: c.about_url }) }, "About this study")) : null,
@@ -640,4 +655,6 @@ listen("state", (e) => {
   render();
 });
 invoke("autostart", {}).then((v) => (autostartOn = v)).catch(() => {});
+invoke("get_update").then((u) => { update = u; render(); }).catch(() => {});
+listen("update", (e) => { update = e.payload; if (tab === "overview") render(); }).catch(() => {});
 refresh();

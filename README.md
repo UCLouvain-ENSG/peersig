@@ -64,7 +64,8 @@ Windows, PeerSig uses the packet capture built into the system.
 The PeerSig icon in the menu bar shows what is happening: a fingerprint while
 it captures, a faded one when paused or not running, an arrow while a report
 is being sent. The window shows what was seen this week, what will be sent,
-and what was sent before.
+and what was sent before. When a new version of PeerSig is published, the
+window and the menu offer to install it; nothing installs until you click.
 
 The release builds are not signed by Apple yet: the first time, macOS refuses
 to open the app. Open *System Settings → Privacy & Security* and choose

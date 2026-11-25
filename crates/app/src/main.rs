@@ -7,6 +7,7 @@
 
 mod model;
 mod probe;
+mod update;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,6 +31,8 @@ struct Tray {
     report: MenuItem<Wry>,
     send: MenuItem<Wry>,
     pause: CheckMenuItem<Wry>,
+    /// "Install PeerSig <version>…" when an update was found.
+    update: MenuItem<Wry>,
 }
 
 #[cfg(target_os = "linux")]
@@ -166,6 +169,18 @@ async fn autostart(app: AppHandle, enabled: Option<bool>) -> R<bool> {
     m.is_enabled().map_err(e2s)
 }
 
+/// The update found by the last daily check, if any (see update.rs).
+#[tauri::command]
+async fn get_update(found: State<'_, update::Found>) -> R<Option<update::Available>> {
+    Ok(found.available())
+}
+
+/// Installs the update found, when the participant asks; restarts PeerSig.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> R<()> {
+    update::install(&app).await
+}
+
 /// Leaves the study: forgets the code and history; optionally deletes the
 /// local logs.
 #[tauri::command]
@@ -204,9 +219,11 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open PeerSig…", true, None::<&str>)?;
     let pause = CheckMenuItem::with_id(app, "pause", "Pause capture", true, false, None::<&str>)?;
     let send = MenuItem::with_id(app, "send", "Send the report now", false, None::<&str>)?;
+    let current = format!("PeerSig {}", app.package_info().version);
+    let update = MenuItem::with_id(app, "update", &current, false, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit PeerSig", true, None::<&str>)?;
     let sep = || PredefinedMenuItem::separator(app);
-    let menu = Menu::with_items(app, &[&status, &report, &sep()?, &open, &pause, &send, &sep()?, &quit])?;
+    let menu = Menu::with_items(app, &[&status, &report, &sep()?, &open, &pause, &send, &sep()?, &update, &quit])?;
     TrayIconBuilder::with_id("main")
         .icon(Image::from_bytes(ICON_PAUSED)?)
         .icon_as_template(true)
@@ -242,12 +259,36 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                         }
                     });
                 }
+                "update" => {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(why) = update::install(&app).await {
+                            notify(&app, &why);
+                        }
+                    });
+                }
                 _ => {}
             }
         })
         .build(app)?;
-    app.manage(Tray { status, report, send, pause });
+    app.manage(Tray { status, report, send, pause, update });
     Ok(())
+}
+
+/// Shows an update found (or none) in the tray and the window.
+fn show_update(app: &AppHandle, found: Option<&update::Available>) {
+    if let Some(m) = app.try_state::<Tray>() {
+        match found {
+            Some(a) => {
+                let _ = m.update.set_text(format!("Install PeerSig {}…", a.version));
+                let _ = m.update.set_enabled(true);
+            }
+            None => {
+                let _ = m.update.set_text(format!("PeerSig {}", app.package_info().version));
+                let _ = m.update.set_enabled(false);
+            }
+        }
+    }
+    let _ = app.emit("update", found);
 }
 
 // ---------------------------------------------------------------- host
@@ -302,6 +343,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--background"])))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_state,
             get_items,
@@ -315,6 +357,8 @@ fn main() {
             open_logs,
             open_url,
             autostart,
+            get_update,
+            install_update,
             leave
         ])
         .setup(|app| {
@@ -330,6 +374,18 @@ fn main() {
             #[cfg(target_os = "linux")]
             app.manage(Child(std::sync::Mutex::new(None)));
             build_tray(app)?;
+            // The login entry starts whichever copy of PeerSig wrote it, and
+            // the autostart plugin only checks that one exists: an older
+            // install, or a build run from elsewhere, would keep being the
+            // one started. Point it at this copy.
+            let login = app.autolaunch();
+            if login.is_enabled().unwrap_or(false) {
+                let _ = login.enable();
+            }
+            app.manage(update::Found::default());
+            if update::enabled(app.handle()) {
+                tauri::async_runtime::spawn(update::run(app.handle().clone()));
+            }
             if !enrolled || !std::env::args().any(|a| a == "--background") {
                 show_window(app.handle());
             }

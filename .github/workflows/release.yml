@@ -73,6 +73,8 @@ jobs:
           S_APPLE_ID: ${{ secrets.APPLE_ID }}
           S_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           S_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          S_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          S_UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           # Sign and notarize only when the secrets exist (see docs/deploy.md).
           if [ -n "$S_APPLE_CERTIFICATE" ]; then
@@ -80,23 +82,72 @@ jobs:
             export APPLE_SIGNING_IDENTITY="$S_APPLE_SIGNING_IDENTITY" APPLE_ID="$S_APPLE_ID"
             export APPLE_PASSWORD="$S_APPLE_PASSWORD" APPLE_TEAM_ID="$S_APPLE_TEAM_ID"
           fi
-          npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          # Updates (a .sig per package) only when the updater key exists.
+          set --
+          if [ -n "$S_UPDATER_KEY" ]; then
+            export TAURI_SIGNING_PRIVATE_KEY="$S_UPDATER_KEY" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$S_UPDATER_KEY_PASSWORD"
+            set -- --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          fi
+          npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} "$@"
       # Debian names libpcap's library libpcap.so.0.8; Fedora, RHEL and
       # openSUSE keep its own name, libpcap.so.1. Same library: the RPM's
       # probe asks for that name.
       - if: runner.os == 'Linux'
         name: RPM
         working-directory: crates/app
+        env:
+          S_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          S_UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           patchelf --replace-needed libpcap.so.0.8 libpcap.so.1 binaries/peersig-probe-${{ matrix.target }}
           patchelf --print-needed binaries/peersig-probe-${{ matrix.target }} | grep -Fx libpcap.so.1
-          npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles rpm
+          set --
+          if [ -n "$S_UPDATER_KEY" ]; then
+            export TAURI_SIGNING_PRIVATE_KEY="$S_UPDATER_KEY" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$S_UPDATER_KEY_PASSWORD"
+            set -- --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          fi
+          npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles rpm "$@"
       - name: Upload
         run: |
           cd target/${{ matrix.target }}/release/bundle
+          # The macOS update is the .app as a .tar.gz, named alike for both
+          # processors: give it the version and processor of its .dmg.
+          for t in macos/*.app.tar.gz; do
+            [ -e "$t" ] || continue
+            arch=x64; [ "${{ matrix.target }}" = aarch64-apple-darwin ] && arch=aarch64
+            n="macos/PeerSig_${TAG#v}_${arch}.app.tar.gz"
+            mv "$t" "$n"
+            if [ -e "$t.sig" ]; then mv "$t.sig" "$n.sig"; fi
+          done
           files=$(ls dmg/*.dmg deb/*.deb rpm/*.rpm appimage/*.AppImage msi/*.msi 2>/dev/null || true)
           test -n "$files"
+          # With the updater key: each package's signature, and the macOS update.
+          files="$files $(ls macos/*.app.tar.gz deb/*.deb.sig rpm/*.rpm.sig appimage/*.AppImage.sig msi/*.msi.sig macos/*.app.tar.gz.sig 2>/dev/null || true)"
           gh release upload "$TAG" $files --clobber --repo "$GITHUB_REPOSITORY"
+
+  # The desktop app's update manifest, from the signatures uploaded above
+  # (none without the updater key: then no manifest, and no updates). The
+  # app reads it from the latest published release: a draft is never
+  # offered.
+  updater:
+    needs: app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - run: |
+          mkdir sigs
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir sigs --pattern 'PeerSig*.sig' || true
+          if ! ls sigs/*.sig > /dev/null 2>&1; then
+            echo "::warning::No signed package (no TAURI_SIGNING_PRIVATE_KEY secret): no update manifest (docs/deploy.md)"
+            exit 0
+          fi
+          # The release commit's subject, without "PeerSig x.y.z: ", as the notes.
+          notes=$(git log -1 --format=%s "$TAG" | sed 's/^PeerSig [0-9.]*: //')
+          python3 scripts/updater_manifest.py "$TAG" "$GITHUB_REPOSITORY" sigs "$notes" > latest.json
+          cat latest.json
+          gh release upload "$TAG" latest.json --clobber --repo "$GITHUB_REPOSITORY"
 
   linux-binaries:
     needs: draft
@@ -169,7 +220,7 @@ jobs:
           gh release upload "$TAG" "$apk" --clobber --repo "$GITHUB_REPOSITORY"
 
   checksums:
-    needs: [app, linux-binaries, android]
+    needs: [app, updater, linux-binaries, android]
     runs-on: ubuntu-latest
     steps:
       - run: |

@@ -58,6 +58,15 @@ only two or more; an item the participant removed stays out of merges.
 Item parsing refuses unknown fields, so a ballot cannot carry more than
 this. Handshakes with no identified application are not sent.
 
+Besides ballots, the desktop app checks once a day for a new version: it
+downloads `latest.json` from the latest published release on GitHub, a
+public file, and sends nothing about the participant. GitHub sees the
+computer's address and that it runs PeerSig, as for any download from
+it; the study's server sees no update check. An update is installed only
+when the participant asks, after its signature is checked against the
+study's key built into the app (`crates/app/src/update.rs`). The Android
+app has no such check.
+
 ## Layers
 
 ### 0. Enrollment
