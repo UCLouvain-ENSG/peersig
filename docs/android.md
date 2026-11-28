@@ -85,7 +85,14 @@ Android shows an app other apps' traffic only through a VPN
 - The VPN's DNS server (10.88.0.2, `fd50:ee5:91c::2`) stands for the
   network's own: queries are forwarded to the DNS servers of the Wi-Fi or
   mobile network, updated when it changes. No other resolver is used.
-  Private DNS keeps working (its ClientHellos are credited to `dns`).
+  Private DNS set to a provider's name keeps working (it goes to that
+  provider; its ClientHellos are credited to `dns`). Automatic Private
+  DNS, which tries DNS over TLS (port 853) on the VPN's server, is refused
+  at once there, so lookups stay plain DNS. Before 0.1.22 it was forwarded
+  to the network's resolver: on a network whose resolver has it (a café's
+  Wi-Fi with 8.8.8.8), Android took it up for the VPN's network, which
+  lives as long as the VPN, and on the next network every lookup first
+  waited 20 s for a resolver without it, until PeerSig stopped.
   The app follows the best network that is not a VPN
   (`registerBestMatchingNetworkCallback`; a network request on Android 10
   and 11), not its default network: Android gives a VPN's own app its VPN

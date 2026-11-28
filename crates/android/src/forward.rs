@@ -17,7 +17,8 @@
 //! The VPN names a DNS server of its own ([`Dns::VIRTUAL_V4`]); queries to
 //! it go to the network's own DNS servers, which the app updates when the
 //! network changes. Nothing else is redirected, and no other resolver is
-//! used: with no known server, queries go unanswered.
+//! used: with no known server, queries go unanswered. DNS over TLS to it
+//! is refused ([`Dns::upstream`]).
 
 use std::collections::HashMap;
 use std::io;
@@ -94,12 +95,25 @@ impl Dns {
     }
 
     /// Where a flow to `dst` really goes: the network's DNS server for the
-    /// VPN's (same port: 53, or 853 for DNS over TLS), `dst` otherwise.
-    /// None for the VPN's DNS server when the network has none.
+    /// VPN's, on port 53; `dst` otherwise. None (refused, or unanswered)
+    /// for the VPN's DNS server on another port, or when the network has
+    /// none.
+    ///
+    /// Not 853, DNS over TLS: Android's automatic Private DNS tries it on
+    /// the VPN's server, and once it works, uses it for every lookup on the
+    /// VPN's network, which lives as long as the VPN. Forwarded to a
+    /// network whose resolver has it (8.8.8.8 on a café's Wi-Fi), it
+    /// worked; on the next network the same address led to a resolver
+    /// without it, and each lookup waited for it to fail first: DNS was
+    /// gone for every app until PeerSig stopped. Refused at once, it never
+    /// works, and lookups stay plain DNS, which follows the network.
     pub fn upstream(&self, dst: SocketAddr) -> Option<SocketAddr> {
         let virtual_dns = dst.ip() == IpAddr::V4(Self::VIRTUAL_V4) || dst.ip() == IpAddr::V6(Self::VIRTUAL_V6);
         if !virtual_dns {
             return Some(dst);
+        }
+        if dst.port() != 53 {
+            return None;
         }
         let servers = self.upstream.read().unwrap();
         // The same family first: the network may lack the other one.
@@ -592,15 +606,58 @@ mod tests {
     fn dns_goes_to_the_network() {
         let d = Dns::new();
         let v4: SocketAddr = (Dns::VIRTUAL_V4, 53).into();
-        let v6: SocketAddr = (Dns::VIRTUAL_V6, 853).into();
+        let v6: SocketAddr = (Dns::VIRTUAL_V6, 53).into();
         let other: SocketAddr = "192.0.2.1:53".parse().unwrap();
         assert_eq!(d.upstream(other), Some(other));
         assert_eq!(d.upstream(v4), None, "no server known: unanswered");
         d.set(vec!["2001:db8::53".parse().unwrap(), "192.168.1.1".parse().unwrap()]);
         assert_eq!(d.upstream(v4), Some("192.168.1.1:53".parse().unwrap()));
-        assert_eq!(d.upstream(v6), Some("[2001:db8::53]:853".parse().unwrap()));
+        assert_eq!(d.upstream(v6), Some("[2001:db8::53]:53".parse().unwrap()));
         d.set(vec!["192.168.1.1".parse().unwrap()]);
-        assert_eq!(d.upstream(v6), Some("192.168.1.1:853".parse().unwrap()));
+        assert_eq!(d.upstream(v6), Some("192.168.1.1:53".parse().unwrap()));
+    }
+
+    /// DNS over TLS to the VPN's own server is refused, whatever the
+    /// network's resolver: Android must never take it up (`Dns::upstream`).
+    /// Elsewhere, 853 goes where it was going (Private DNS set to a name).
+    #[test]
+    fn dns_over_tls_to_the_vpn_is_refused() {
+        let d = Dns::new();
+        d.set(vec!["8.8.8.8".parse().unwrap(), "2001:4860:4860::8888".parse().unwrap()]);
+        assert_eq!(d.upstream((Dns::VIRTUAL_V4, 853).into()), None);
+        assert_eq!(d.upstream((Dns::VIRTUAL_V6, 853).into()), None);
+        let named: SocketAddr = "8.8.4.4:853".parse().unwrap();
+        assert_eq!(d.upstream(named), Some(named));
+    }
+
+    /// The app's SYN to the VPN's server on 853 is answered with a reset at
+    /// once (not after `CONNECT_TIMEOUT`), so Android's check fails fast.
+    #[tokio::test]
+    async fn dns_over_tls_syn_gets_a_reset_at_once() {
+        let (a, b) = std::os::unix::net::UnixDatagram::pair().unwrap();
+        a.set_nonblocking(true).unwrap();
+        // Safety: `a` is open, and the AsyncFd owns it.
+        let fd = Arc::new(unsafe { AsyncFd::register(OwnedFd::from(a)) }.map_err(io::Error::from).unwrap());
+        let (ready, mut ready_rx) = mpsc::unbounded_channel();
+        let dns = Arc::new(Dns::new());
+        dns.set(vec!["192.0.2.53".parse().unwrap()]);
+        let counters = Arc::new(Counters::default());
+        let gate = Arc::new(Gate { flows: Mutex::new(HashMap::new()), ready, fd: Arc::downgrade(&fd), dns, counters: counters.clone() });
+        let mut syn = syn(false, 0x02);
+        syn[16..20].copy_from_slice(&Dns::VIRTUAL_V4.octets());
+        // The test SYN's IPv4 header has an option: TCP starts at 24.
+        syn[26..28].copy_from_slice(&853u16.to_be_bytes());
+        let t = Instant::now();
+        assert!(gate.hold(&syn), "held at the gate");
+        let mut rst = [0u8; 128];
+        b.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let n = tokio::task::spawn_blocking(move || b.recv(&mut rst).map(|n| (n, rst))).await.unwrap().unwrap();
+        assert!(t.elapsed() < Duration::from_secs(1), "at once: {:?}", t.elapsed());
+        let (n, rst) = n;
+        assert_eq!(rst[..n][20 + 13], 0x14, "RST|ACK");
+        assert_eq!(&rst[12..16], &Dns::VIRTUAL_V4.octets(), "from the VPN's server");
+        assert!(ready_rx.try_recv().is_err(), "never handed to the stack");
+        assert_eq!(counters.failed.load(Ordering::Relaxed), 1);
     }
 
     /// An app's SYN: IPv4 (with an option, so the header is 24 bytes) or
