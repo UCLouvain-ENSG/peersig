@@ -3873,7 +3873,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-android"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -3893,7 +3893,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-app"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3911,7 +3911,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-client"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "axum",
@@ -3926,7 +3926,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-headless"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "axum",
@@ -3943,7 +3943,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-probe"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -3967,7 +3967,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-proto"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3985,7 +3985,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-relay"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "axum",
@@ -4001,7 +4001,7 @@ dependencies = [
 
 [[package]]
 name = "peersig-server"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "axum",
